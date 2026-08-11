@@ -57,6 +57,7 @@ def _collect_samples(
     images_dir: Path,
     labels_dir: Path,
     subjects: list[str],
+    max_samples: Optional[int] = None,
 ) -> list[dict]:
     """
     Percorre todos os sujeitos/sessões e monta a lista de amostras.
@@ -99,6 +100,8 @@ def _collect_samples(
                     'image_path': img_path,
                     'au_intensities': intensities,
                 })
+                if max_samples is not None and len(samples) >= max_samples:
+                    return samples
 
     return samples
 
@@ -113,6 +116,7 @@ class DisfaDataset(Dataset):
         img_config: configuração de imagem (tamanho, normalização).
         augment:    se True, aplica augmentações aleatórias (flip, color jitter).
         disfa_dir:  diretório raiz do dataset (padrão: DISFA_DIR da config).
+        max_samples: limita amostras para smoke tests; None usa todas.
     """
 
     def __init__(
@@ -121,6 +125,7 @@ class DisfaDataset(Dataset):
         img_config: Optional[ImageConfig] = None,
         augment: bool = False,
         disfa_dir: Optional[Path] = None,
+        max_samples: Optional[int] = None,
     ):
         self.img_config = img_config or DEFAULT_IMAGE_CONFIG
         self.augment = augment
@@ -130,7 +135,15 @@ class DisfaDataset(Dataset):
         labels_dir = root / 'Labels'
         used_subjects = subjects or DISFA_SUBJECTS
 
-        self.samples = _collect_samples(images_dir, labels_dir, used_subjects)
+        if max_samples is not None and max_samples <= 0:
+            raise ValueError("max_samples deve ser maior que zero")
+
+        self.samples = _collect_samples(
+            images_dir,
+            labels_dir,
+            used_subjects,
+            max_samples=max_samples,
+        )
         if not self.samples:
             raise RuntimeError(
                 f"Nenhuma amostra encontrada em {root}. "
@@ -197,12 +210,15 @@ def create_dataloaders(
     batch_size: int = 32,
     num_workers: int = 4,
     disfa_dir: Optional[Path] = None,
+    max_train_samples: Optional[int] = None,
+    max_val_samples: Optional[int] = None,
 ) -> tuple[DataLoader, DataLoader]:
     """
     Cria DataLoaders de treino e validação.
 
     Se subjects_val for None, usa o último sujeito da lista de treino para validação.
     Se subjects_train for None, usa os primeiros 8 sujeitos para treino e o 9º para val.
+    max_train_samples/max_val_samples permitem testes rápidos do pipeline.
     """
     if subjects_train is None and subjects_val is None:
         subjects_train = DISFA_SUBJECTS[:-1]   # primeiros 8
@@ -213,12 +229,14 @@ def create_dataloaders(
         img_config=img_config,
         augment=True,
         disfa_dir=disfa_dir,
+        max_samples=max_train_samples,
     )
     val_ds = DisfaDataset(
         subjects=subjects_val,
         img_config=img_config,
         augment=False,
         disfa_dir=disfa_dir,
+        max_samples=max_val_samples,
     )
 
     train_loader = DataLoader(

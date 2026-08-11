@@ -45,6 +45,15 @@ def test_dataset_len(fake_disfa):
     assert len(ds) == 5
 
 
+def test_dataset_max_samples(fake_disfa):
+    ds = DisfaDataset(
+        subjects=["SN001"],
+        disfa_dir=fake_disfa,
+        max_samples=2,
+    )
+    assert len(ds) == 2
+
+
 def test_item_shapes(fake_disfa):
     ds = DisfaDataset(subjects=["SN001"], disfa_dir=fake_disfa)
     item = ds[0]

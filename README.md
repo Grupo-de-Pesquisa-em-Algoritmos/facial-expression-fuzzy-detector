@@ -186,6 +186,10 @@ pip install -r requirements.txt
 
 ## Uso
 
+### SDumont
+
+Para preparar o ambiente Conda no Scratch e submeter os jobs Slurm de smoke test, treinamento e avaliação, consulte [`sdumont/README.md`](sdumont/README.md).
+
 ### Treinamento
 
 ```bash

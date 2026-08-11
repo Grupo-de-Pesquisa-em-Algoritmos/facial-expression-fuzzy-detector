@@ -18,6 +18,10 @@ dataset/
 # Results folder
 results/
 
+# SDumont job logs
+sdumont/logs/*.out
+sdumont/logs/*.err
+
 # Bat files
 *.bat
 

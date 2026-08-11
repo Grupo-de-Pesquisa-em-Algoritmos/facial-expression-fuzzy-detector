@@ -17,6 +17,16 @@ from utils import DisfaDataset, AULoss, Trainer, Evaluator, AUPredictor
 from utils.dataset_loader import create_dataloaders, DISFA_SUBJECTS
 
 
+def select_device(require_cuda=False):
+    """Seleciona CUDA quando disponível e falha cedo em jobs que exigem GPU."""
+    if require_cuda and not torch.cuda.is_available():
+        raise RuntimeError(
+            "CUDA não está disponível. Verifique a alocação de GPU, os módulos "
+            "carregados e a instalação do PyTorch."
+        )
+    return torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+
 # ─── Construtores ─────────────────────────────────────────────────────────────
 
 def setup_model_and_criterion(args, device):
@@ -44,6 +54,9 @@ def setup_dataloaders(args):
         img_config=DEFAULT_IMAGE_CONFIG,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
+        disfa_dir=Path(args.data_dir),
+        max_train_samples=args.max_train_samples,
+        max_val_samples=args.max_val_samples,
     )
     print(f"   Treino : {len(train_loader.dataset):>6} amostras")
     print(f"   Val    : {len(val_loader.dataset):>6} amostras")
@@ -54,7 +67,7 @@ def setup_dataloaders(args):
 
 def train_model(args):
     """Loop completo de treinamento."""
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device = select_device(args.require_cuda)
     print(f"🖥️  Device: {device}")
 
     train_loader, val_loader = setup_dataloaders(args)
@@ -102,7 +115,7 @@ def train_model(args):
 
 def test_model(args):
     """Avalia o modelo num set de teste e grava relatório."""
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device = select_device(args.require_cuda)
 
     print("=" * 70)
     print("Avaliação — YOLOv11 Action Units")
@@ -121,6 +134,9 @@ def test_model(args):
         img_config=DEFAULT_IMAGE_CONFIG,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
+        disfa_dir=Path(args.data_dir),
+        max_train_samples=args.max_train_samples,
+        max_val_samples=args.max_val_samples,
     )
 
     evaluator = Evaluator(model, device=str(device), results_dir='results')
@@ -132,7 +148,7 @@ def test_model(args):
 
 def demo(args):
     """Demonstração AU em imagem completa (com detecção de rosto via MediaPipe)."""
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device = select_device(args.require_cuda)
 
     print("=" * 70)
     print("Demo — Detecção de Action Units")
@@ -186,6 +202,10 @@ def main():
     parser.add_argument('--weight-decay', type=float, default=1e-4)
     parser.add_argument('--num-workers', type=int, default=0)
     parser.add_argument('--save-dir', default='checkpoints')
+    parser.add_argument('--data-dir', default='datasets/archive')
+    parser.add_argument('--max-train-samples', type=int)
+    parser.add_argument('--max-val-samples', type=int)
+    parser.add_argument('--require-cuda', action='store_true')
 
     # Demo
     parser.add_argument('--image', default='')

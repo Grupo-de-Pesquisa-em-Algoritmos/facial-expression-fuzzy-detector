@@ -1,0 +1,33 @@
+#!/bin/bash
+#SBATCH --job-name=fer-smoke
+#SBATCH --partition=sequana_gpu_dev
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --gpus-per-node=1
+#SBATCH --cpus-per-gpu=4
+#SBATCH --mem-per-gpu=32G
+#SBATCH --time=00:20:00
+#SBATCH --no-requeue
+#SBATCH --output=sdumont/logs/%x-%j.out
+#SBATCH --error=sdumont/logs/%x-%j.err
+
+set -euo pipefail
+source "${SLURM_SUBMIT_DIR}/sdumont/common.sh"
+
+EPOCHS="${SDUMONT_EPOCHS:-1}"
+BATCH_SIZE="${SDUMONT_BATCH_SIZE:-4}"
+NUM_WORKERS="${SDUMONT_NUM_WORKERS:-4}"
+MAX_TRAIN_SAMPLES="${SDUMONT_MAX_TRAIN_SAMPLES:-256}"
+MAX_VAL_SAMPLES="${SDUMONT_MAX_VAL_SAMPLES:-64}"
+SAVE_DIR="${SDUMONT_SAVE_DIR:-checkpoints/smoke-${SLURM_JOB_ID}}"
+
+srun --ntasks=1 python -u main.py \
+    --mode train \
+    --require-cuda \
+    --data-dir "$DATA_DIR" \
+    --epochs "$EPOCHS" \
+    --batch-size "$BATCH_SIZE" \
+    --num-workers "$NUM_WORKERS" \
+    --max-train-samples "$MAX_TRAIN_SAMPLES" \
+    --max-val-samples "$MAX_VAL_SAMPLES" \
+    --save-dir "$SAVE_DIR"
