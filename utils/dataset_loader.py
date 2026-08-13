@@ -31,6 +31,12 @@ DISFA_SUBJECTS = [
     'SN010', 'SN013', 'SN025', 'SN027',
 ]
 
+# Divisão fixa e reprodutível por identidade. A validação serve para escolher
+# checkpoint e thresholds; os sujeitos de teste ficam intocados até o relatório final.
+DEFAULT_TRAIN_SUBJECTS = DISFA_SUBJECTS[:6]
+DEFAULT_VAL_SUBJECTS = DISFA_SUBJECTS[6:7]
+DEFAULT_TEST_SUBJECTS = DISFA_SUBJECTS[7:]
+
 
 def _parse_label_file(path: Path) -> dict[str, float]:
     """
@@ -133,7 +139,7 @@ class DisfaDataset(Dataset):
         root = Path(disfa_dir) if disfa_dir else DISFA_DIR
         images_dir = root / 'Images'
         labels_dir = root / 'Labels'
-        used_subjects = subjects or DISFA_SUBJECTS
+        used_subjects = DISFA_SUBJECTS if subjects is None else subjects
 
         if max_samples is not None and max_samples <= 0:
             raise ValueError("max_samples deve ser maior que zero")
@@ -168,10 +174,18 @@ class DisfaDataset(Dataset):
         ])
 
     # ── Estatísticas para pos_weight BCE ──────────────────────────────────────
-    def compute_pos_weight(self, device: str = 'cpu') -> torch.Tensor:
+    def compute_pos_weight(
+        self,
+        device: str = 'cpu',
+        mode: str = 'sqrt',
+        max_weight: Optional[float] = 5.0,
+    ) -> torch.Tensor:
         """
         Calcula pos_weight por AU para BCEWithLogitsLoss.
-        pos_weight[i] = (nº frames negativos) / (nº frames positivos + ε)
+
+        ``balanced`` usa a razão negativa/positiva completa; ``sqrt`` reduz
+        sua agressividade e é o padrão; ``none`` desliga o balanceamento.
+        ``max_weight`` evita que AUs muito raras dominem todo o gradiente.
         """
         all_binary = np.stack([
             (s['au_intensities'] > 0).astype(np.float32)
@@ -179,7 +193,20 @@ class DisfaDataset(Dataset):
         ])  # (N, 12)
         pos = all_binary.sum(axis=0)
         neg = len(self.samples) - pos
-        pw = neg / (pos + 1e-6)
+        ratio = neg / (pos + 1e-6)
+        if mode == 'balanced':
+            pw = ratio
+        elif mode == 'sqrt':
+            pw = np.sqrt(ratio)
+        elif mode == 'none':
+            pw = np.ones_like(ratio)
+        else:
+            raise ValueError("mode deve ser 'none', 'sqrt' ou 'balanced'")
+
+        if max_weight is not None:
+            if max_weight <= 0:
+                raise ValueError("max_weight deve ser maior que zero")
+            pw = np.minimum(pw, max_weight)
         return torch.tensor(pw, dtype=torch.float32, device=device)
 
     # ── Dataset interface ──────────────────────────────────────────────────────
@@ -197,7 +224,7 @@ class DisfaDataset(Dataset):
         return {
             'image':     img_tensor,       # (3, H, W)
             'binary':    binary,           # (12,) 0/1
-            'intensity': intensities,      # (12,) 0–3
+            'intensity': intensities,      # (12,) 0–5
         }
 
 
@@ -216,13 +243,16 @@ def create_dataloaders(
     """
     Cria DataLoaders de treino e validação.
 
-    Se subjects_val for None, usa o último sujeito da lista de treino para validação.
-    Se subjects_train for None, usa os primeiros 8 sujeitos para treino e o 9º para val.
+    Por padrão usa seis sujeitos para treino e um sujeito separado para validação.
+    Os dois sujeitos restantes são reservados para o teste final.
     max_train_samples/max_val_samples permitem testes rápidos do pipeline.
     """
-    if subjects_train is None and subjects_val is None:
-        subjects_train = DISFA_SUBJECTS[:-1]   # primeiros 8
-        subjects_val   = DISFA_SUBJECTS[-1:]   # último
+    subjects_train = DEFAULT_TRAIN_SUBJECTS if subjects_train is None else subjects_train
+    subjects_val = DEFAULT_VAL_SUBJECTS if subjects_val is None else subjects_val
+
+    overlap = set(subjects_train) & set(subjects_val)
+    if overlap:
+        raise ValueError(f"Sujeitos repetidos entre treino e validação: {sorted(overlap)}")
 
     train_ds = DisfaDataset(
         subjects=subjects_train,
@@ -256,3 +286,28 @@ def create_dataloaders(
     )
 
     return train_loader, val_loader
+
+
+def create_eval_dataloader(
+    subjects: Optional[list[str]] = None,
+    img_config: Optional[ImageConfig] = None,
+    batch_size: int = 32,
+    num_workers: int = 4,
+    disfa_dir: Optional[Path] = None,
+    max_samples: Optional[int] = None,
+) -> DataLoader:
+    """Cria um DataLoader determinístico, sem augmentation, para val/teste."""
+    dataset = DisfaDataset(
+        subjects=DEFAULT_TEST_SUBJECTS if subjects is None else subjects,
+        img_config=img_config,
+        augment=False,
+        disfa_dir=disfa_dir,
+        max_samples=max_samples,
+    )
+    return DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=True,
+    )
