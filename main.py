@@ -8,13 +8,28 @@ Uso:
 """
 
 import argparse
+import json
+import sys
 import torch
 from pathlib import Path
 
-from config import DEFAULT_IMAGE_CONFIG, DEFAULT_MODEL_CONFIG, DEFAULT_TRAINING_CONFIG
+from config import AU_NAMES, DEFAULT_IMAGE_CONFIG
 from core import YOLOv11AUDetector
-from utils import DisfaDataset, AULoss, Trainer, Evaluator, AUPredictor
-from utils.dataset_loader import create_dataloaders, DISFA_SUBJECTS
+from utils import AULoss, Trainer, Evaluator, AUPredictor
+from utils.dataset_loader import (
+    DEFAULT_TEST_SUBJECTS,
+    DEFAULT_TRAIN_SUBJECTS,
+    DEFAULT_VAL_SUBJECTS,
+    create_dataloaders,
+    create_eval_dataloader,
+)
+
+
+def configure_console_encoding():
+    """Evita UnicodeEncodeError nos consoles Windows que ainda usam cp1252."""
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, 'reconfigure'):
+            stream.reconfigure(encoding='utf-8')
 
 
 def select_device(require_cuda=False):
@@ -51,6 +66,8 @@ def setup_dataloaders(args):
     """Cria DataLoaders de treino e validação a partir do DISFA+."""
     print("\n📂 Carregando dataset DISFA+...")
     train_loader, val_loader = create_dataloaders(
+        subjects_train=args.train_subjects,
+        subjects_val=args.val_subjects,
         img_config=DEFAULT_IMAGE_CONFIG,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
@@ -60,7 +77,29 @@ def setup_dataloaders(args):
     )
     print(f"   Treino : {len(train_loader.dataset):>6} amostras")
     print(f"   Val    : {len(val_loader.dataset):>6} amostras")
+    print(f"   Sujeitos treino: {args.train_subjects}")
+    print(f"   Sujeitos val:    {args.val_subjects}")
     return train_loader, val_loader
+
+
+def load_thresholds(path: str | Path):
+    """Carrega thresholds por AU do JSON produzido no modo calibrate."""
+    payload = json.loads(Path(path).read_text(encoding='utf-8'))
+    values = payload.get('thresholds', payload)
+    try:
+        return [float(values[au]) for au in AU_NAMES]
+    except (KeyError, TypeError) as exc:
+        raise ValueError(f"Arquivo de thresholds inválido: {path}") from exc
+
+
+def resolve_thresholds(args):
+    threshold_path = Path(args.thresholds_file) if args.thresholds_file else None
+    if threshold_path and threshold_path.is_file():
+        print(f"🎚️  Thresholds calibrados: {threshold_path}")
+        return load_thresholds(threshold_path)
+    if threshold_path and args.mode == 'test':
+        raise FileNotFoundError(f"Arquivo de thresholds não encontrado: {threshold_path}")
+    return args.conf_threshold
 
 
 # ─── Modos ────────────────────────────────────────────────────────────────────
@@ -74,7 +113,12 @@ def train_model(args):
     model, criterion = setup_model_and_criterion(args, device)
 
     # Atualizar pos_weight com base no dataset de treino
-    pos_weight = train_loader.dataset.compute_pos_weight(device=str(device))
+    pos_weight = train_loader.dataset.compute_pos_weight(
+        device=str(device),
+        mode=args.pos_weight_mode,
+        max_weight=args.max_pos_weight,
+    )
+    print(f"⚖️  pos_weight ({args.pos_weight_mode}): {pos_weight.detach().cpu().tolist()}")
     criterion.bce = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight, reduction='mean')
 
     # Retomar treinamento se solicitado
@@ -109,6 +153,8 @@ def train_model(args):
         save_dir=args.save_dir,
         accumulation_steps=accumulation_steps,
         use_amp=True,
+        early_stopping_patience=args.early_stopping_patience,
+        monitor=args.monitor,
     )
     trainer.train()
 
@@ -127,23 +173,51 @@ def test_model(args):
     checkpoint = torch.load(args.weights, map_location=device)
     model.load_state_dict(checkpoint['model_state_dict'])
 
-    # Usar o último sujeito como set de teste (separado do treino)
-    from utils.dataset_loader import create_dataloaders
-    _, test_loader = create_dataloaders(
-        subjects_val=[DISFA_SUBJECTS[-1]],
+    test_loader = create_eval_dataloader(
+        subjects=args.test_subjects,
         img_config=DEFAULT_IMAGE_CONFIG,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
         disfa_dir=Path(args.data_dir),
-        max_train_samples=args.max_train_samples,
-        max_val_samples=args.max_val_samples,
+        max_samples=args.max_test_samples,
     )
 
-    evaluator = Evaluator(model, device=str(device), results_dir='results')
-    results = evaluator.evaluate_and_save(test_loader)
+    print(f"   Sujeitos teste: {args.test_subjects}")
+    evaluator = Evaluator(model, device=str(device), results_dir=args.results_dir)
+    results = evaluator.evaluate_and_save(
+        test_loader,
+        thresholds=resolve_thresholds(args),
+    )
 
     from utils.metrics import AUMetrics
     print("\n" + AUMetrics.format_summary(results))
+
+
+def calibrate_model(args):
+    """Calibra um threshold por AU usando somente os sujeitos de validação."""
+    device = select_device(args.require_cuda)
+    model, _ = setup_model_and_criterion(args, device)
+    checkpoint = torch.load(args.weights, map_location=device)
+    model.load_state_dict(checkpoint['model_state_dict'])
+
+    val_loader = create_eval_dataloader(
+        subjects=args.val_subjects,
+        img_config=DEFAULT_IMAGE_CONFIG,
+        batch_size=args.batch_size,
+        num_workers=args.num_workers,
+        disfa_dir=Path(args.data_dir),
+        max_samples=args.max_val_samples,
+    )
+    threshold_path = Path(args.thresholds_file or 'results/thresholds.json')
+    evaluator = Evaluator(model, device=str(device), results_dir=threshold_path.parent)
+    thresholds, results = evaluator.calibrate_and_save(
+        val_loader,
+        filename=threshold_path.name,
+        subjects=args.val_subjects,
+    )
+    from utils.metrics import AUMetrics
+    print("\n" + AUMetrics.format_summary(results))
+    print(f"\nThresholds: {dict(zip(AU_NAMES, thresholds.tolist()))}")
 
 
 def demo(args):
@@ -163,7 +237,7 @@ def demo(args):
     predictor = AUPredictor(
         model,
         device=str(device),
-        threshold=args.conf_threshold,
+        threshold=resolve_thresholds(args),
         img_config=DEFAULT_IMAGE_CONFIG,
     )
 
@@ -184,14 +258,15 @@ def demo(args):
 # ─── CLI ──────────────────────────────────────────────────────────────────────
 
 def main():
+    configure_console_encoding()
     parser = argparse.ArgumentParser(
         description='YOLOv11 — Detecção de Action Units (FACS / DISFA+)'
     )
 
-    parser.add_argument('--mode', default='train', choices=['train', 'test', 'demo'])
+    parser.add_argument('--mode', default='train', choices=['train', 'calibrate', 'test', 'demo'])
 
     # Modelo
-    parser.add_argument('--base-channels', type=int, default=64)
+    parser.add_argument('--base-channels', type=int, default=32)
     parser.add_argument('--weights', default='checkpoints/best_model.pth')
     parser.add_argument('--resume', default='')
 
@@ -206,16 +281,28 @@ def main():
     parser.add_argument('--max-train-samples', type=int)
     parser.add_argument('--max-val-samples', type=int)
     parser.add_argument('--require-cuda', action='store_true')
+    parser.add_argument('--train-subjects', nargs='+', default=DEFAULT_TRAIN_SUBJECTS)
+    parser.add_argument('--val-subjects', nargs='+', default=DEFAULT_VAL_SUBJECTS)
+    parser.add_argument('--test-subjects', nargs='+', default=DEFAULT_TEST_SUBJECTS)
+    parser.add_argument('--max-test-samples', type=int)
+    parser.add_argument('--pos-weight-mode', choices=['none', 'sqrt', 'balanced'], default='sqrt')
+    parser.add_argument('--max-pos-weight', type=float, default=5.0)
+    parser.add_argument('--early-stopping-patience', type=int, default=7)
+    parser.add_argument('--monitor', choices=['map', 'f1_macro', 'val_loss'], default='map')
+    parser.add_argument('--results-dir', default='results')
 
     # Demo
     parser.add_argument('--image', default='')
     parser.add_argument('--output', default='')
     parser.add_argument('--conf-threshold', type=float, default=0.5)
+    parser.add_argument('--thresholds-file', default='')
 
     args = parser.parse_args()
 
     if args.mode == 'train':
         train_model(args)
+    elif args.mode == 'calibrate':
+        calibrate_model(args)
     elif args.mode == 'test':
         test_model(args)
     elif args.mode == 'demo':
