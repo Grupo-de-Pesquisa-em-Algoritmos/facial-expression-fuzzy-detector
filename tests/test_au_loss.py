@@ -9,17 +9,17 @@ import torch
 import pytest
 
 from utils.au_loss import AULoss
-from config.settings import NUM_AUS
+from config.settings import AU_MAX_INTENSITY, NUM_AUS
 
 
 def _fake_batch(B: int = 4):
     predictions = {
         "binary_logits": torch.randn(B, NUM_AUS),
-        "intensity":     torch.rand(B, NUM_AUS) * 3,
+        "intensity":     torch.rand(B, NUM_AUS) * AU_MAX_INTENSITY,
     }
     targets = {
         "binary":    torch.randint(0, 2, (B, NUM_AUS)).float(),
-        "intensity": torch.rand(B, NUM_AUS) * 3,
+        "intensity": torch.rand(B, NUM_AUS) * AU_MAX_INTENSITY,
     }
     return predictions, targets
 
@@ -53,7 +53,7 @@ def test_no_active_aus():
     B = 4
     preds = {
         "binary_logits": torch.randn(B, NUM_AUS),
-        "intensity":     torch.rand(B, NUM_AUS) * 3,
+        "intensity":     torch.rand(B, NUM_AUS) * AU_MAX_INTENSITY,
     }
     targets = {
         "binary":    torch.zeros(B, NUM_AUS),
