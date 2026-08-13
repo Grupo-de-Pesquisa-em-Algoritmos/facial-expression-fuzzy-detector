@@ -87,8 +87,8 @@ FACS_EMOTION_MAPPING: Dict[str, List[str]] = {
     'Surprise':  ['AU1', 'AU2', 'AU5', 'AU26'],
 }
 
-# Intensidade máxima das AUs no dataset (escala 0-3)
-AU_MAX_INTENSITY: float = 3.0
+# Intensidade FACS usada pelos rótulos DISFA/DISFA+ (0=ausente, A-E=1-5).
+AU_MAX_INTENSITY: float = 5.0
 
 # ── Configurações padrão ─────────────────────────────────────────────────────
 DEFAULT_IMAGE_CONFIG = ImageConfig(
