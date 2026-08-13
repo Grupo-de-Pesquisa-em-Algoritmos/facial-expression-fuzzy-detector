@@ -18,7 +18,9 @@ EPOCHS="${SDUMONT_EPOCHS:-50}"
 BATCH_SIZE="${SDUMONT_BATCH_SIZE:-4}"
 NUM_WORKERS="${SDUMONT_NUM_WORKERS:-8}"
 LEARNING_RATE="${SDUMONT_LR:-1e-4}"
-SAVE_DIR="${SDUMONT_SAVE_DIR:-checkpoints}"
+SAVE_DIR="${SDUMONT_SAVE_DIR:-checkpoints/${SLURM_JOB_ID}}"
+BASE_CHANNELS="${SDUMONT_BASE_CHANNELS:-32}"
+EARLY_STOPPING="${SDUMONT_EARLY_STOPPING:-7}"
 
 TRAIN_ARGS=(
     --mode train
@@ -29,6 +31,10 @@ TRAIN_ARGS=(
     --num-workers "$NUM_WORKERS"
     --lr "$LEARNING_RATE"
     --save-dir "$SAVE_DIR"
+    --base-channels "$BASE_CHANNELS"
+    --early-stopping-patience "$EARLY_STOPPING"
+    --pos-weight-mode sqrt
+    --max-pos-weight 5
 )
 
 if [[ -n "${SDUMONT_RESUME:-}" ]]; then

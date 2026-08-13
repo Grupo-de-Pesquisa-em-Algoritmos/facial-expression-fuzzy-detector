@@ -6,7 +6,8 @@ Este diretório contém os jobs Slurm do projeto:
 |---|---|---|
 | `smoke.srm` | `sequana_gpu_dev` | Teste curto com 256 amostras de treino e 64 de validação |
 | `train.srm` | `sequana_gpu` | Treino completo, 50 épocas por padrão |
-| `evaluate.srm` | `sequana_gpu` | Avaliação de um checkpoint |
+| `calibrate.srm` | `sequana_gpu` | Calibra um threshold por AU na validação |
+| `evaluate.srm` | `sequana_gpu` | Avaliação final nos sujeitos de teste |
 
 Os três jobs usam um nó, uma GPU V100 e um processo Python. O código atual não implementa DDP, portanto solicitar mais GPUs ou mais nós não acelera o treinamento e desperdiça UAs.
 
@@ -79,11 +80,17 @@ sbatch --test-only sdumont/train.srm
 sbatch --export=ALL,SDUMONT_DATA_DIR="$SCRATCH/datasets/disfa-plus" sdumont/train.srm
 ```
 
-Para avaliar o melhor checkpoint:
+Depois do treino, calibre os thresholds na validação e só então avalie os dois sujeitos de teste:
 
 ```bash
-sbatch --export=ALL,SDUMONT_DATA_DIR="$SCRATCH/datasets/disfa-plus",SDUMONT_WEIGHTS="$SCRATCH/Fer-With-Fuzzy/checkpoints/best_model.pth" sdumont/evaluate.srm
+WEIGHTS="$SCRATCH/Fer-With-Fuzzy/checkpoints/JOB_ID_DO_TREINO/best_model.pth"
+THRESHOLDS="$SCRATCH/Fer-With-Fuzzy/results/thresholds-JOB_ID_DO_TREINO.json"
+
+sbatch --export=ALL,SDUMONT_DATA_DIR="$SCRATCH/datasets/disfa-plus",SDUMONT_WEIGHTS="$WEIGHTS",SDUMONT_THRESHOLDS="$THRESHOLDS" sdumont/calibrate.srm
+sbatch --export=ALL,SDUMONT_DATA_DIR="$SCRATCH/datasets/disfa-plus",SDUMONT_WEIGHTS="$WEIGHTS",SDUMONT_THRESHOLDS="$THRESHOLDS" sdumont/evaluate.srm
 ```
+
+O protocolo padrão divide identidades em 6 para treino, 1 para validação/calibração e 2 exclusivamente para teste. Não calibre thresholds no conjunto de teste.
 
 ## 5. Acompanhar
 
@@ -127,9 +134,12 @@ Variáveis aceitas:
 | `SDUMONT_BATCH_SIZE` | `4` | Batch por iteração |
 | `SDUMONT_NUM_WORKERS` | `8` | Processos de leitura do dataset |
 | `SDUMONT_LR` | `1e-4` | Learning rate |
-| `SDUMONT_SAVE_DIR` | `checkpoints` | Diretório de checkpoints |
+| `SDUMONT_SAVE_DIR` | `checkpoints/$SLURM_JOB_ID` | Diretório de checkpoints, isolado por job |
 | `SDUMONT_RESUME` | vazio | Checkpoint inicial do treino |
 | `SDUMONT_WEIGHTS` | `checkpoints/best_model.pth` | Pesos usados na avaliação |
+| `SDUMONT_THRESHOLDS` | `results/thresholds.json` | JSON criado pela calibração e usado na avaliação |
+| `SDUMONT_BASE_CHANNELS` | `32` | Largura do modelo; use `64` apenas para checkpoints antigos compatíveis |
+| `SDUMONT_EARLY_STOPPING` | `7` | Épocas sem melhora de mAP antes de encerrar |
 
 Opções Slurm do arquivo podem ser substituídas na linha de comando. Exemplo para uma fila permitida pela sua conta e um limite de 12 horas:
 
