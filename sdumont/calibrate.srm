@@ -1,0 +1,36 @@
+#!/bin/bash
+#SBATCH --job-name=fer-calibrate
+#SBATCH --partition=sequana_gpu
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --gpus-per-node=1
+#SBATCH --cpus-per-gpu=4
+#SBATCH --mem-per-gpu=32G
+#SBATCH --time=02:00:00
+#SBATCH --no-requeue
+#SBATCH --output=sdumont/logs/%x-%j.out
+#SBATCH --error=sdumont/logs/%x-%j.err
+
+set -euo pipefail
+source "${SLURM_SUBMIT_DIR}/sdumont/common.sh"
+
+WEIGHTS="${SDUMONT_WEIGHTS:-checkpoints/best_model.pth}"
+THRESHOLDS="${SDUMONT_THRESHOLDS:-results/thresholds.json}"
+BATCH_SIZE="${SDUMONT_BATCH_SIZE:-8}"
+NUM_WORKERS="${SDUMONT_NUM_WORKERS:-4}"
+BASE_CHANNELS="${SDUMONT_BASE_CHANNELS:-32}"
+
+if [[ ! -f "$WEIGHTS" ]]; then
+    echo "ERRO: pesos não encontrados: $WEIGHTS" >&2
+    exit 1
+fi
+
+srun --ntasks=1 python -u main.py \
+    --mode calibrate \
+    --require-cuda \
+    --data-dir "$DATA_DIR" \
+    --weights "$WEIGHTS" \
+    --thresholds-file "$THRESHOLDS" \
+    --batch-size "$BATCH_SIZE" \
+    --num-workers "$NUM_WORKERS" \
+    --base-channels "$BASE_CHANNELS"

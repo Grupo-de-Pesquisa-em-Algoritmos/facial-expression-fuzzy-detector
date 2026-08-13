@@ -1,0 +1,48 @@
+#!/bin/bash
+#SBATCH --job-name=fer-train
+#SBATCH --partition=sequana_gpu
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --gpus-per-node=1
+#SBATCH --cpus-per-gpu=8
+#SBATCH --mem-per-gpu=64G
+#SBATCH --time=24:00:00
+#SBATCH --no-requeue
+#SBATCH --output=sdumont/logs/%x-%j.out
+#SBATCH --error=sdumont/logs/%x-%j.err
+
+set -euo pipefail
+source "${SLURM_SUBMIT_DIR}/sdumont/common.sh"
+
+EPOCHS="${SDUMONT_EPOCHS:-50}"
+BATCH_SIZE="${SDUMONT_BATCH_SIZE:-4}"
+NUM_WORKERS="${SDUMONT_NUM_WORKERS:-8}"
+LEARNING_RATE="${SDUMONT_LR:-1e-4}"
+SAVE_DIR="${SDUMONT_SAVE_DIR:-checkpoints/${SLURM_JOB_ID}}"
+BASE_CHANNELS="${SDUMONT_BASE_CHANNELS:-32}"
+EARLY_STOPPING="${SDUMONT_EARLY_STOPPING:-7}"
+
+TRAIN_ARGS=(
+    --mode train
+    --require-cuda
+    --data-dir "$DATA_DIR"
+    --epochs "$EPOCHS"
+    --batch-size "$BATCH_SIZE"
+    --num-workers "$NUM_WORKERS"
+    --lr "$LEARNING_RATE"
+    --save-dir "$SAVE_DIR"
+    --base-channels "$BASE_CHANNELS"
+    --early-stopping-patience "$EARLY_STOPPING"
+    --pos-weight-mode sqrt
+    --max-pos-weight 5
+)
+
+if [[ -n "${SDUMONT_RESUME:-}" ]]; then
+    if [[ ! -f "$SDUMONT_RESUME" ]]; then
+        echo "ERRO: checkpoint não encontrado: $SDUMONT_RESUME" >&2
+        exit 1
+    fi
+    TRAIN_ARGS+=(--resume "$SDUMONT_RESUME")
+fi
+
+srun --ntasks=1 python -u main.py "${TRAIN_ARGS[@]}"

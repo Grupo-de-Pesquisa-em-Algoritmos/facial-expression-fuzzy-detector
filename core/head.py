@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 from blocks.conv import ConvBlock
-from config.settings import NUM_AUS
+from config.settings import AU_MAX_INTENSITY, NUM_AUS
 
 
 class AUDetectionHead(nn.Module):
@@ -11,7 +11,7 @@ class AUDetectionHead(nn.Module):
     Recebe features multi-escala do Neck (N3, N4, N5) e produz
     duas saídas independentes por AU:
         - binary_logits: presença/ausência de cada AU  (B, NUM_AUS)
-        - intensity:     intensidade de cada AU 0–3     (B, NUM_AUS)
+        - intensity:     intensidade de cada AU 0–5     (B, NUM_AUS)
     """
 
     def __init__(self, in_channels: list[int], num_aus: int = NUM_AUS):
@@ -33,7 +33,7 @@ class AUDetectionHead(nn.Module):
             ConvBlock(c5 // 2, c5 // 4, kernel_size=1),
         )
 
-        fused_dim = c3 // 4 + c4 // 4 + c5 // 4  # ex: 128 + 256 + 256 = 640
+        fused_dim = c3 // 4 + c4 // 4 + c5 // 4  # ex: 64 + 128 + 256 = 448
 
         # Cabeça compartilhada
         self.shared = nn.Sequential(
@@ -49,7 +49,7 @@ class AUDetectionHead(nn.Module):
         # Cabeça binária: AU ativa ou não
         self.binary_head = nn.Linear(256, num_aus)
 
-        # Cabeça de intensidade: 0–3 contínuo
+        # Cabeça de intensidade: 0–5 contínuo
         self.intensity_head = nn.Linear(256, num_aus)
 
     def forward(self, features):
@@ -60,7 +60,7 @@ class AUDetectionHead(nn.Module):
         Returns:
             dict com:
                 'binary_logits': (B, num_aus) — raw logits para BCE
-                'intensity':     (B, num_aus) — valores [0, 3] via clamp
+                'intensity':     (B, num_aus) — valores [0, 5] via sigmoid
         """
         n3, n4, n5 = features
 
@@ -81,7 +81,9 @@ class AUDetectionHead(nn.Module):
         x = self.shared(x)  # (B, 256)
 
         binary_logits = self.binary_head(x)                          # (B, num_aus)
-        intensity = self.intensity_head(x).clamp(0.0, 3.0)          # (B, num_aus)
+        # Sigmoid mantém toda a saída no intervalo válido sem as regiões de
+        # gradiente nulo que um clamp aplicado aos logits criaria.
+        intensity = AU_MAX_INTENSITY * torch.sigmoid(self.intensity_head(x))
 
         return {
             'binary_logits': binary_logits,
@@ -97,17 +99,17 @@ class YOLOv11AUDetector(nn.Module):
 
     Saída:
         'binary_logits': (B, 12) — aplicar sigmoid para probabilidade
-        'intensity':     (B, 12) — intensidade [0, 3]
+        'intensity':     (B, 12) — intensidade [0, 5]
     """
 
-    def __init__(self, in_channels: int = 3, base_channels: int = 64, num_aus: int = NUM_AUS):
+    def __init__(self, in_channels: int = 3, base_channels: int = 32, num_aus: int = NUM_AUS):
         super().__init__()
         from core.backbone import YOLOv11Backbone
         from core.neck import YOLOv11Neck
 
         self.backbone = YOLOv11Backbone(in_channels=in_channels, base_channels=base_channels)
 
-        channels = [base_channels * 8, base_channels * 16, base_channels * 16]
+        channels = [base_channels * 4, base_channels * 8, base_channels * 16]
         self.neck = YOLOv11Neck(channels=channels)
         self.head = AUDetectionHead(in_channels=channels, num_aus=num_aus)
 

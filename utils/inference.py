@@ -12,7 +12,7 @@ Dependência opcional: mediapipe (pip install mediapipe)
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Union
+from typing import Sequence, Union
 
 import numpy as np
 import torch
@@ -82,12 +82,17 @@ class AUPredictor:
         self,
         model: nn.Module,
         device: str = 'cpu',
-        threshold: float = 0.5,
+        threshold: float | Sequence[float] = 0.5,
         img_config=None,
     ):
         self.model = model.to(device).eval()
         self.device = device
-        self.threshold = threshold
+        thresholds = np.asarray(threshold, dtype=np.float32)
+        if thresholds.ndim == 0:
+            thresholds = np.full(len(AU_NAMES), float(thresholds), dtype=np.float32)
+        if thresholds.shape != (len(AU_NAMES),):
+            raise ValueError(f"Esperados {len(AU_NAMES)} thresholds; recebido {thresholds.shape}")
+        self.thresholds = thresholds
         self.transform = _build_transform(img_config)
 
         # MediaPipe face detector (carregado sob demanda)
@@ -185,10 +190,12 @@ class AUPredictor:
 
         au_results = {}
         for i, au_name in enumerate(AU_NAMES):
+            active = bool(probs[i] >= self.thresholds[i])
             au_results[au_name] = {
-                'active':      bool(probs[i] >= self.threshold),
+                'active':      active,
                 'probability': float(probs[i]),
-                'intensity':   float(intensity[i]),
+                'intensity':   float(intensity[i]) if active else 0.0,
+                'raw_intensity': float(intensity[i]),
                 'description': AU_DESCRIPTIONS[au_name],
             }
         return au_results

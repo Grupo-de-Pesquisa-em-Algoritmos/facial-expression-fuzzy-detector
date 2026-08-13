@@ -15,7 +15,7 @@
 
 Este projeto implementa um sistema de **reconhecimento de expressões faciais** em dois estágios:
 
-1. **Detecção de Action Units (AUs)** — uma rede YOLOv11 customizada classifica quais músculos faciais estão contraídos e com qual intensidade (escala 0–3), a partir do padrão FACS (*Facial Action Coding System*).
+1. **Detecção de Action Units (AUs)** — uma rede YOLOv11 customizada classifica quais músculos faciais estão contraídos e com qual intensidade (escala FACS 0–5), a partir do padrão FACS (*Facial Action Coding System*).
 2. **Inferência de emoção via Lógica Fuzzy** — as intensidades das AUs são mapeadas para emoções básicas (Alegria, Tristeza, Raiva, Medo, Desgosto, Surpresa) por um motor fuzzy com regras linguísticas interpretáveis.
 
 O projeto é parte do Trabalho de Conclusão de Curso (TCC) da **Universidade Estadual do Oeste do Paraná (Unioeste)** — Ciência da Computação.
@@ -49,7 +49,7 @@ O projeto é parte do Trabalho de Conclusão de Curso (TCC) da **Universidade Es
    │                │
 ┌──▼──────┐  ┌──────▼────┐
 │ binary  │  │ intensity │
-│ (12 AUs)│  │  (0 – 3)  │
+│ (12 AUs)│  │  (0 – 5)  │
 └──┬──────┘  └──────┬────┘
    │                │
    └───────┬────────┘
@@ -108,13 +108,13 @@ O modelo detecta as 12 AUs presentes no dataset DISFA+:
 - Global Average Pooling em cada escala → concatenação
 - Camada compartilhada FC → dois ramos paralelos:
   - **Ramo binário:** 12 logits → `BCEWithLogitsLoss`
-  - **Ramo de intensidade:** 12 valores ∈ [0, 3] → `SmoothL1Loss`
+  - **Ramo de intensidade:** 12 valores ∈ [0, 5] via sigmoid → `SmoothL1Loss`
 
 **Saída:**
 ```python
 {
     'binary_logits': Tensor(B, 12),  # sigmoid → probabilidade de ativação
-    'intensity':     Tensor(B, 12),  # intensidade contínua 0–3
+    'intensity':     Tensor(B, 12),  # intensidade contínua 0–5
 }
 ```
 
@@ -127,7 +127,7 @@ onde $\mathcal{L}_{SmoothL1}$ é calculada apenas nos frames em que a AU está a
 ### Estágio 2 — Inferência Fuzzy
 
 As intensidades contínuas das AUs alimentam um motor fuzzy:
-- **Variáveis de entrada:** intensidade de cada AU (0–3)
+- **Variáveis de entrada:** intensidade de cada AU (0–5)
 - **Variáveis linguísticas:** {ausente, fraca, moderada, forte}
 - **Regras:** baseadas no mapeamento FACS acima
 - **Saída:** score de pertinência por emoção → classe final
@@ -140,7 +140,7 @@ O modelo é treinado no **DISFA+** (*Denver Intensity of Spontaneous Facial Acti
 
 - **9 sujeitos:** SN001, SN003, SN004, SN007, SN009, SN010, SN013, SN025, SN027
 - **~130 000 frames** de vídeos de expressões espontâneas
-- **Anotações:** intensidade por AU por frame (0–3), feitas por especialistas FACS
+- **Anotações:** intensidade por AU por frame (0–5), feitas por especialistas FACS
 - **Imagens:** faces recortadas 200×200 px
 
 Estrutura esperada em disco:
@@ -186,10 +186,14 @@ pip install -r requirements.txt
 
 ## Uso
 
+### SDumont
+
+Para preparar o ambiente Conda no Scratch e submeter os jobs Slurm de smoke test, treinamento e avaliação, consulte [`sdumont/README.md`](sdumont/README.md).
+
 ### Treinamento
 
 ```bash
-# Padrão (8 sujeitos treino, 1 validação)
+# Padrão (6 sujeitos treino, 1 validação e 2 reservados para teste)
 python main.py --mode train --epochs 50 --batch-size 4
 
 # Com mais épocas e learning rate menor
@@ -199,10 +203,20 @@ python main.py --mode train --epochs 100 --batch-size 4 --lr 5e-5
 ### Avaliação
 
 ```bash
-python main.py --mode test --weights checkpoints/best_model.pth
+# Calibre os thresholds somente na validação
+python main.py --mode calibrate \
+  --weights checkpoints/best_model.pth \
+  --thresholds-file results/thresholds.json
+
+# Aplique-os uma única vez aos sujeitos de teste
+python main.py --mode test \
+  --weights checkpoints/best_model.pth \
+  --thresholds-file results/thresholds.json
 ```
 
-O relatório é salvo em `results/evaluation_report.txt` com F1 por AU, mAP e MAE de intensidade.
+O relatório é salvo em `results/evaluation_report.txt` com precisão, recall, F1 e AP por AU, além de mAP, MAE, RMSE, correlação de Pearson e ICC(3,1).
+
+O modelo padrão usa `base_channels=32`, adequado ao número reduzido de identidades do DISFA+. Checkpoints antigos criados com `base_channels=64` só podem ser carregados passando `--base-channels 64`; os checkpoints anteriores à correção de intensidade 0–5 devem ser retreinados.
 
 ### Demo (imagem completa)
 
@@ -226,7 +240,7 @@ model.load_state_dict(checkpoint['model_state_dict'])
 # Predição com threshold
 pred = model.predict(image_tensor, binary_threshold=0.5)
 # pred['binary']:    (B, 12) bool
-# pred['intensity']: (B, 12) float [0, 3]
+# pred['intensity']: (B, 12) float [0, 5]
 ```
 
 ---
@@ -255,7 +269,7 @@ Fer-With-Fuzzy/
 ├── datasets/archive/    # Dataset DISFA+ (Images/ + Labels/)
 ├── checkpoints/         # Pesos do modelo
 ├── results/             # Relatórios de avaliação
-└── main.py              # Ponto de entrada (train / test / demo)
+└── main.py              # Ponto de entrada (train / calibrate / test / demo)
 ```
 
 ---

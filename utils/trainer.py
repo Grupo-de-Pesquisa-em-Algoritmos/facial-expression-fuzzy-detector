@@ -15,6 +15,8 @@ import time
 from tqdm import tqdm
 from torch.amp import autocast, GradScaler
 
+from utils.metrics import AUMetrics
+
 
 class Trainer:
     """
@@ -32,7 +34,9 @@ class Trainer:
         num_epochs,
         save_dir='checkpoints',
         accumulation_steps=4,
-        use_amp=True
+        use_amp=True,
+        early_stopping_patience=7,
+        monitor='map',
     ):
         self.model = model
         self.train_loader = train_loader
@@ -43,19 +47,29 @@ class Trainer:
         self.device = device
         self.num_epochs = num_epochs
         self.save_dir = Path(save_dir)
-        self.save_dir.mkdir(exist_ok=True)
+        self.save_dir.mkdir(parents=True, exist_ok=True)
         
         self.accumulation_steps = accumulation_steps
         self.use_amp = use_amp and torch.cuda.is_available()
         # ✅ CORRIGIDO: GradScaler atualizado para PyTorch 2.9+
         self.scaler = GradScaler('cuda') if self.use_amp else None
         
-        self.best_val_loss = float('inf')
+        if monitor not in {'map', 'f1_macro', 'val_loss'}:
+            raise ValueError("monitor deve ser 'map', 'f1_macro' ou 'val_loss'")
+        self.monitor = monitor
+        self.early_stopping_patience = max(0, early_stopping_patience)
+        self.best_score = float('inf') if monitor == 'val_loss' else float('-inf')
+        self.epochs_without_improvement = 0
         self.history = {
             'train_loss': [],
             'val_loss': [],
             'train_binary_loss': [],
             'train_intensity_loss': [],
+            'val_binary_loss': [],
+            'val_intensity_loss': [],
+            'val_f1_macro': [],
+            'val_map': [],
+            'val_mae': [],
         }
 
     def train_epoch(self, epoch):
@@ -132,6 +146,7 @@ class Trainer:
         total_loss = 0
         total_binary = 0
         total_intensity = 0
+        metrics = AUMetrics()
 
         pbar = tqdm(self.val_loader, desc=f'Época {epoch+1}/{self.num_epochs} [Val]')
 
@@ -143,6 +158,7 @@ class Trainer:
             predictions = self.model(images)
             targets = {'binary': binary, 'intensity': intensity}
             losses = self.criterion(predictions, targets)
+            metrics.update(predictions, targets)
 
             total_loss      += losses['loss'].item()
             total_binary    += losses['binary_loss'].item()
@@ -155,16 +171,28 @@ class Trainer:
             })
 
         n = len(self.val_loader)
-        return total_loss / n, total_binary / n, total_intensity / n
+        result = metrics.compute()
+        result.update({
+            'val_loss': total_loss / n,
+            'binary_loss': total_binary / n,
+            'intensity_loss': total_intensity / n,
+        })
+        return result
 
-    def save_checkpoint(self, epoch, val_loss, is_best=False):
+    def save_checkpoint(self, epoch, val_metrics, is_best=False):
         """Salva checkpoint do modelo"""
         checkpoint = {
             'epoch': epoch,
             'model_state_dict': self.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
             'scheduler_state_dict': self.scheduler.state_dict(),
-            'val_loss': val_loss,
+            'val_loss': val_metrics['val_loss'],
+            'val_metrics': {
+                key: value for key, value in val_metrics.items()
+                if isinstance(value, (int, float))
+            },
+            'monitor': self.monitor,
+            'best_score': self.best_score,
             'history': self.history
         }
         
@@ -176,7 +204,10 @@ class Trainer:
         if is_best:
             best_path = self.save_dir / 'best_model.pth'
             torch.save(checkpoint, best_path)
-            print(f'✅ Melhor modelo salvo com val_loss={val_loss:.4f}')
+            print(f'✅ Melhor modelo salvo com {self.monitor}={val_metrics[self.monitor]:.4f}')
+
+    def _is_better(self, value):
+        return value < self.best_score if self.monitor == 'val_loss' else value > self.best_score
 
     def train(self):
         """Loop de treinamento completo"""
@@ -206,8 +237,16 @@ class Trainer:
             self.history['train_intensity_loss'].append(train_l1)
 
             # Validar
-            val_loss, val_bce, val_l1 = self.validate(epoch)
+            val_metrics = self.validate(epoch)
+            val_loss = val_metrics['val_loss']
+            val_bce = val_metrics['binary_loss']
+            val_l1 = val_metrics['intensity_loss']
             self.history['val_loss'].append(val_loss)
+            self.history['val_binary_loss'].append(val_bce)
+            self.history['val_intensity_loss'].append(val_l1)
+            self.history['val_f1_macro'].append(val_metrics['f1_macro'])
+            self.history['val_map'].append(val_metrics['map'])
+            self.history['val_mae'].append(val_metrics['mae_mean'])
 
             # Atualizar learning rate
             self.scheduler.step(val_loss)
@@ -218,20 +257,36 @@ class Trainer:
             print(f"\n📈 Época {epoch+1}/{self.num_epochs} - {epoch_time:.2f}s")
             print(f"   Train Loss: {train_loss:.4f} (bce: {train_bce:.4f}, l1: {train_l1:.4f})")
             print(f"   Val Loss:   {val_loss:.4f} (bce: {val_bce:.4f}, l1: {val_l1:.4f})")
+            print(f"   Val Macro F1: {val_metrics['f1_macro']:.4f} | "
+                  f"mAP: {val_metrics['map']:.4f} | MAE: {val_metrics['mae_mean']:.4f}")
             print(f"   LR: {self.optimizer.param_groups[0]['lr']:.6f}")
             
             # Salvar checkpoint
-            is_best = val_loss < self.best_val_loss
+            monitor_value = val_metrics[self.monitor]
+            is_best = self._is_better(monitor_value)
             if is_best:
-                self.best_val_loss = val_loss
+                self.best_score = monitor_value
+                self.epochs_without_improvement = 0
+            else:
+                self.epochs_without_improvement += 1
             
             if (epoch + 1) % 10 == 0 or is_best:
-                self.save_checkpoint(epoch, val_loss, is_best)
+                self.save_checkpoint(epoch, val_metrics, is_best)
             
             print()
+
+            if (
+                self.early_stopping_patience > 0
+                and self.epochs_without_improvement >= self.early_stopping_patience
+            ):
+                print(
+                    f"⏹ Early stopping: {self.monitor} não melhorou por "
+                    f"{self.early_stopping_patience} épocas."
+                )
+                break
         
         print("=" * 70)
         print(f"✅ Treinamento concluído!")
-        print(f"   Melhor Val Loss: {self.best_val_loss:.4f}")
+        print(f"   Melhor {self.monitor}: {self.best_score:.4f}")
         print(f"   Checkpoints salvos em: {self.save_dir}")
         print("=" * 70)

@@ -3,7 +3,7 @@ au_loss.py — Função de perda para detecção de Action Units (AUs).
 
 Combina:
     - BCEWithLogitsLoss: detectar se a AU está ativa (binary)
-    - SmoothL1Loss:      estimar a intensidade contínua (0–3)
+    - SmoothL1Loss:      estimar a intensidade contínua (0–5)
 
 Uso:
     criterion = AULoss(pos_weight=dataset.compute_pos_weight(device))
@@ -47,10 +47,10 @@ class AULoss(nn.Module):
         Args:
             predictions: dict com chaves
                 'binary_logits' — (B, num_aus) logits não normalizados
-                'intensity'     — (B, num_aus) intensidades [0, 3]
+                'intensity'     — (B, num_aus) intensidades [0, 5]
             targets: dict com chaves
                 'binary'    — (B, num_aus) labels 0/1
-                'intensity' — (B, num_aus) intensidades reais [0, 3]
+                'intensity' — (B, num_aus) intensidades reais [0, 5]
 
         Returns:
             dict com:
