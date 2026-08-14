@@ -20,11 +20,18 @@ NUM_WORKERS="${SDUMONT_NUM_WORKERS:-4}"
 MAX_TRAIN_SAMPLES="${SDUMONT_MAX_TRAIN_SAMPLES:-256}"
 MAX_VAL_SAMPLES="${SDUMONT_MAX_VAL_SAMPLES:-64}"
 SAVE_DIR="${SDUMONT_SAVE_DIR:-checkpoints/smoke-${SLURM_JOB_ID}}"
+ARCHITECTURE="${SDUMONT_ARCHITECTURE:-roi}"
+ROI_CHANNELS="${SDUMONT_ROI_CHANNELS:-128}"
+ROI_SIZE="${SDUMONT_ROI_SIZE:-3}"
 
 srun --ntasks=1 python -u main.py \
     --mode train \
+    --architecture "$ARCHITECTURE" \
+    --roi-channels "$ROI_CHANNELS" \
+    --roi-size "$ROI_SIZE" \
     --require-cuda \
     --data-dir "$DATA_DIR" \
+    "${FACE_CROP_ARGS[@]}" \
     --epochs "$EPOCHS" \
     --batch-size "$BATCH_SIZE" \
     --num-workers "$NUM_WORKERS" \

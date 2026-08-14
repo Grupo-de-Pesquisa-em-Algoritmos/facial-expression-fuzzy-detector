@@ -42,6 +42,15 @@ def select_device(require_cuda=False):
     return torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
+def resolve_face_crops(args) -> bool:
+    """ROI usa crops por padrão; a flag permite uma ablação global justa."""
+    return args.face_crops if args.face_crops is not None else args.architecture == 'roi'
+
+
+def face_boxes_path(args) -> Path | None:
+    return Path(args.face_boxes) if args.face_boxes else None
+
+
 # ─── Construtores ─────────────────────────────────────────────────────────────
 
 def setup_model_and_criterion(args, device):
@@ -49,7 +58,14 @@ def setup_model_and_criterion(args, device):
     model = YOLOv11AUDetector(
         in_channels=3,
         base_channels=args.base_channels,
+        architecture=args.architecture,
+        roi_channels=args.roi_channels,
+        roi_size=args.roi_size,
     ).to(device)
+    model.preprocessing_config = {
+        'face_crops': resolve_face_crops(args),
+        'face_margin': args.face_margin,
+    }
 
     # pos_weight calculado a partir do dataset de treino
     # (None → BCE sem pesos; será sobrescrito durante setup_dataloaders quando possível)
@@ -74,11 +90,15 @@ def setup_dataloaders(args):
         disfa_dir=Path(args.data_dir),
         max_train_samples=args.max_train_samples,
         max_val_samples=args.max_val_samples,
+        crop_faces=resolve_face_crops(args),
+        face_boxes_file=face_boxes_path(args),
+        face_margin=args.face_margin,
     )
     print(f"   Treino : {len(train_loader.dataset):>6} amostras")
     print(f"   Val    : {len(val_loader.dataset):>6} amostras")
     print(f"   Sujeitos treino: {args.train_subjects}")
     print(f"   Sujeitos val:    {args.val_subjects}")
+    print(f"   Crop facial:     {resolve_face_crops(args)}")
     return train_loader, val_loader
 
 
@@ -102,12 +122,37 @@ def resolve_thresholds(args):
     return args.conf_threshold
 
 
+def load_checkpoint_into_model(model, checkpoint_path, device):
+    """Carrega pesos e rejeita cedo uma arquitetura incompatível."""
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    saved_config = checkpoint.get('model_config', {})
+    current_config = model.export_config()
+    for key in ('architecture', 'base_channels', 'roi_channels', 'roi_size'):
+        if key in saved_config and saved_config[key] != current_config[key]:
+            raise ValueError(
+                f"Checkpoint usa {key}={saved_config[key]!r}, mas o modelo foi "
+                f"criado com {key}={current_config[key]!r}. Ajuste o argumento correspondente."
+            )
+    saved_preprocessing = checkpoint.get('preprocessing_config', {})
+    current_preprocessing = getattr(model, 'preprocessing_config', {})
+    for key in ('face_crops', 'face_margin'):
+        if key in saved_preprocessing and saved_preprocessing[key] != current_preprocessing.get(key):
+            raise ValueError(
+                f"Checkpoint usa {key}={saved_preprocessing[key]!r}, mas a execução "
+                f"usa {key}={current_preprocessing.get(key)!r}. Ajuste o pré-processamento."
+            )
+    state = checkpoint.get('model_state_dict', checkpoint)
+    model.load_state_dict(state)
+    return checkpoint
+
+
 # ─── Modos ────────────────────────────────────────────────────────────────────
 
 def train_model(args):
     """Loop completo de treinamento."""
     device = select_device(args.require_cuda)
     print(f"🖥️  Device: {device}")
+    print(f"🧠 Arquitetura: {args.architecture}")
 
     train_loader, val_loader = setup_dataloaders(args)
     model, criterion = setup_model_and_criterion(args, device)
@@ -124,8 +169,7 @@ def train_model(args):
     # Retomar treinamento se solicitado
     if args.resume:
         print(f"📥 Retomando checkpoint: {args.resume}")
-        checkpoint = torch.load(args.resume, map_location=device)
-        model.load_state_dict(checkpoint['model_state_dict'])
+        checkpoint = load_checkpoint_into_model(model, args.resume, device)
 
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -170,8 +214,7 @@ def test_model(args):
     model, _ = setup_model_and_criterion(args, device)
 
     print(f"\n📥 Carregando pesos: {args.weights}")
-    checkpoint = torch.load(args.weights, map_location=device)
-    model.load_state_dict(checkpoint['model_state_dict'])
+    checkpoint = load_checkpoint_into_model(model, args.weights, device)
 
     test_loader = create_eval_dataloader(
         subjects=args.test_subjects,
@@ -180,6 +223,9 @@ def test_model(args):
         num_workers=args.num_workers,
         disfa_dir=Path(args.data_dir),
         max_samples=args.max_test_samples,
+        crop_faces=resolve_face_crops(args),
+        face_boxes_file=face_boxes_path(args),
+        face_margin=args.face_margin,
     )
 
     print(f"   Sujeitos teste: {args.test_subjects}")
@@ -197,8 +243,7 @@ def calibrate_model(args):
     """Calibra um threshold por AU usando somente os sujeitos de validação."""
     device = select_device(args.require_cuda)
     model, _ = setup_model_and_criterion(args, device)
-    checkpoint = torch.load(args.weights, map_location=device)
-    model.load_state_dict(checkpoint['model_state_dict'])
+    checkpoint = load_checkpoint_into_model(model, args.weights, device)
 
     val_loader = create_eval_dataloader(
         subjects=args.val_subjects,
@@ -207,6 +252,9 @@ def calibrate_model(args):
         num_workers=args.num_workers,
         disfa_dir=Path(args.data_dir),
         max_samples=args.max_val_samples,
+        crop_faces=resolve_face_crops(args),
+        face_boxes_file=face_boxes_path(args),
+        face_margin=args.face_margin,
     )
     threshold_path = Path(args.thresholds_file or 'results/thresholds.json')
     evaluator = Evaluator(model, device=str(device), results_dir=threshold_path.parent)
@@ -231,8 +279,7 @@ def demo(args):
     model, _ = setup_model_and_criterion(args, device)
 
     print(f"\n📥 Carregando pesos: {args.weights}")
-    checkpoint = torch.load(args.weights, map_location=device)
-    model.load_state_dict(checkpoint['model_state_dict'])
+    checkpoint = load_checkpoint_into_model(model, args.weights, device)
 
     predictor = AUPredictor(
         model,
@@ -267,6 +314,9 @@ def main():
 
     # Modelo
     parser.add_argument('--base-channels', type=int, default=32)
+    parser.add_argument('--architecture', choices=['global', 'roi'], default='global')
+    parser.add_argument('--roi-channels', type=int, default=128)
+    parser.add_argument('--roi-size', type=int, default=3)
     parser.add_argument('--weights', default='checkpoints/best_model.pth')
     parser.add_argument('--resume', default='')
 
@@ -278,6 +328,14 @@ def main():
     parser.add_argument('--num-workers', type=int, default=0)
     parser.add_argument('--save-dir', default='checkpoints')
     parser.add_argument('--data-dir', default='datasets/archive')
+    parser.add_argument('--face-boxes', default='')
+    parser.add_argument('--face-margin', type=float, default=0.20)
+    parser.add_argument(
+        '--face-crops',
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help='usa crops faciais; por padrão é ligado para roi e desligado para global',
+    )
     parser.add_argument('--max-train-samples', type=int)
     parser.add_argument('--max-val-samples', type=int)
     parser.add_argument('--require-cuda', action='store_true')

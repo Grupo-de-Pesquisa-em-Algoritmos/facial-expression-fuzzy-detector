@@ -18,6 +18,9 @@ WEIGHTS="${SDUMONT_WEIGHTS:-checkpoints/best_model.pth}"
 BATCH_SIZE="${SDUMONT_BATCH_SIZE:-8}"
 NUM_WORKERS="${SDUMONT_NUM_WORKERS:-4}"
 BASE_CHANNELS="${SDUMONT_BASE_CHANNELS:-32}"
+ARCHITECTURE="${SDUMONT_ARCHITECTURE:-roi}"
+ROI_CHANNELS="${SDUMONT_ROI_CHANNELS:-128}"
+ROI_SIZE="${SDUMONT_ROI_SIZE:-3}"
 
 if [[ ! -f "$WEIGHTS" ]]; then
     echo "ERRO: pesos não encontrados: $WEIGHTS" >&2
@@ -28,10 +31,14 @@ EVAL_ARGS=(
     --mode test
     --require-cuda
     --data-dir "$DATA_DIR"
+    "${FACE_CROP_ARGS[@]}"
     --weights "$WEIGHTS"
     --batch-size "$BATCH_SIZE"
     --num-workers "$NUM_WORKERS"
     --base-channels "$BASE_CHANNELS"
+    --architecture "$ARCHITECTURE"
+    --roi-channels "$ROI_CHANNELS"
+    --roi-size "$ROI_SIZE"
 )
 
 if [[ -n "${SDUMONT_THRESHOLDS:-}" ]]; then

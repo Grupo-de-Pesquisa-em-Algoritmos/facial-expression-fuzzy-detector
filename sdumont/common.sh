@@ -13,7 +13,20 @@ fi
 PROJECT_DIR="${SDUMONT_PROJECT_DIR:-${SLURM_SUBMIT_DIR:-$PWD}}"
 ENV_DIR="${SDUMONT_CONDA_ENV:-$SCRATCH/conda-envs/fer-with-fuzzy}"
 DATA_DIR="${SDUMONT_DATA_DIR:-$PROJECT_DIR/datasets/archive}"
+FACE_BOXES="${SDUMONT_FACE_BOXES:-$DATA_DIR/face_boxes.json}"
+FACE_MARGIN="${SDUMONT_FACE_MARGIN:-0.20}"
 ANACONDA_MODULE="${SDUMONT_ANACONDA_MODULE:-anaconda3/2024.02_sequana}"
+
+FACE_CROP_ARGS=(--face-boxes "$FACE_BOXES" --face-margin "$FACE_MARGIN")
+case "${SDUMONT_FACE_CROPS:-auto}" in
+    auto) ;;
+    1|true|yes) FACE_CROP_ARGS+=(--face-crops) ;;
+    0|false|no) FACE_CROP_ARGS+=(--no-face-crops) ;;
+    *)
+        echo "ERRO: SDUMONT_FACE_CROPS deve ser auto, 1 ou 0." >&2
+        exit 1
+        ;;
+esac
 
 module purge
 module load "$ANACONDA_MODULE"
@@ -43,6 +56,7 @@ echo "Job:       ${SLURM_JOB_ID:-sem-id}"
 echo "Nó(s):     ${SLURM_JOB_NODELIST:-não informado}"
 echo "Projeto:   $PROJECT_DIR"
 echo "Dataset:   $DATA_DIR"
+echo "Faces:     $FACE_BOXES"
 echo "Ambiente:  $ENV_DIR"
 echo "Python:    $(command -v python)"
 

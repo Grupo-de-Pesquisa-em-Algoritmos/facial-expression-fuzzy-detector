@@ -195,6 +195,10 @@ class Trainer:
             'best_score': self.best_score,
             'history': self.history
         }
+        if hasattr(self.model, 'export_config'):
+            checkpoint['model_config'] = self.model.export_config()
+        if hasattr(self.model, 'preprocessing_config'):
+            checkpoint['preprocessing_config'] = self.model.preprocessing_config
         
         # Salvar checkpoint regular
         checkpoint_path = self.save_dir / f'checkpoint_epoch_{epoch+1}.pth'

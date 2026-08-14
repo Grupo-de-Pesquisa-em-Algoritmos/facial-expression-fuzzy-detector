@@ -102,21 +102,57 @@ class YOLOv11AUDetector(nn.Module):
         'intensity':     (B, 12) — intensidade [0, 5]
     """
 
-    def __init__(self, in_channels: int = 3, base_channels: int = 32, num_aus: int = NUM_AUS):
+    def __init__(
+        self,
+        in_channels: int = 3,
+        base_channels: int = 32,
+        num_aus: int = NUM_AUS,
+        architecture: str = 'global',
+        roi_channels: int = 128,
+        roi_size: int = 3,
+    ):
         super().__init__()
         from core.backbone import YOLOv11Backbone
         from core.neck import YOLOv11Neck
+        from core.roi_head import ROIAlignAUHead
+
+        if architecture not in {'global', 'roi'}:
+            raise ValueError("architecture deve ser 'global' ou 'roi'")
+
+        self.architecture = architecture
+        self.base_channels = base_channels
+        self.num_aus = num_aus
+        self.roi_channels = roi_channels
+        self.roi_size = roi_size
 
         self.backbone = YOLOv11Backbone(in_channels=in_channels, base_channels=base_channels)
 
         channels = [base_channels * 4, base_channels * 8, base_channels * 16]
         self.neck = YOLOv11Neck(channels=channels)
-        self.head = AUDetectionHead(in_channels=channels, num_aus=num_aus)
+        if architecture == 'roi':
+            self.head = ROIAlignAUHead(
+                in_channels=channels,
+                num_aus=num_aus,
+                roi_channels=roi_channels,
+                roi_size=roi_size,
+            )
+        else:
+            self.head = AUDetectionHead(in_channels=channels, num_aus=num_aus)
 
     def forward(self, x):
         p3, p4, p5 = self.backbone(x)
         n3, n4, n5 = self.neck((p3, p4, p5))
         return self.head((n3, n4, n5))
+
+    def export_config(self) -> dict:
+        """Configuração mínima necessária para reconstruir o checkpoint."""
+        return {
+            'architecture': self.architecture,
+            'base_channels': self.base_channels,
+            'num_aus': self.num_aus,
+            'roi_channels': self.roi_channels,
+            'roi_size': self.roi_size,
+        }
 
     @torch.no_grad()
     def predict(self, x, binary_threshold: float = 0.5):

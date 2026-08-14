@@ -24,6 +24,11 @@ from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
 
 from config.settings import AU_NAMES, DISFA_DIR, DEFAULT_IMAGE_CONFIG, ImageConfig
+from utils.face_preprocessing import (
+    expand_face_box,
+    image_cache_key,
+    load_face_box_cache,
+)
 
 # ─── Sujeitos presentes no dataset DISFA+ ────────────────────────────────────
 DISFA_SUBJECTS = [
@@ -104,6 +109,7 @@ def _collect_samples(
 
                 samples.append({
                     'image_path': img_path,
+                    'cache_key': image_cache_key(img_path, images_dir.parent),
                     'au_intensities': intensities,
                 })
                 if max_samples is not None and len(samples) >= max_samples:
@@ -123,6 +129,9 @@ class DisfaDataset(Dataset):
         augment:    se True, aplica augmentações aleatórias (flip, color jitter).
         disfa_dir:  diretório raiz do dataset (padrão: DISFA_DIR da config).
         max_samples: limita amostras para smoke tests; None usa todas.
+        crop_faces: recorta cada frame usando o cache antes do resize.
+        face_boxes_file: JSON gerado por tools/precompute_face_boxes.py.
+        face_margin: margem proporcional acrescentada à caixa detectada.
     """
 
     def __init__(
@@ -132,17 +141,25 @@ class DisfaDataset(Dataset):
         augment: bool = False,
         disfa_dir: Optional[Path] = None,
         max_samples: Optional[int] = None,
+        crop_faces: bool = False,
+        face_boxes_file: Optional[Path] = None,
+        face_margin: float = 0.20,
     ):
         self.img_config = img_config or DEFAULT_IMAGE_CONFIG
         self.augment = augment
 
         root = Path(disfa_dir) if disfa_dir else DISFA_DIR
+        self.dataset_root = root
+        self.crop_faces = crop_faces
+        self.face_margin = face_margin
         images_dir = root / 'Images'
         labels_dir = root / 'Labels'
         used_subjects = DISFA_SUBJECTS if subjects is None else subjects
 
         if max_samples is not None and max_samples <= 0:
             raise ValueError("max_samples deve ser maior que zero")
+        if face_margin < 0:
+            raise ValueError("face_margin deve ser maior ou igual a zero")
 
         self.samples = _collect_samples(
             images_dir,
@@ -155,6 +172,25 @@ class DisfaDataset(Dataset):
                 f"Nenhuma amostra encontrada em {root}. "
                 "Verifique a estrutura do dataset DISFA+."
             )
+
+        self.face_boxes: dict[str, tuple[int, int, int, int]] = {}
+        if self.crop_faces:
+            cache_path = Path(face_boxes_file) if face_boxes_file else root / 'face_boxes.json'
+            if not cache_path.is_file():
+                raise FileNotFoundError(
+                    f"Cache de faces não encontrado: {cache_path}. Gere-o uma vez com: "
+                    f"python tools/precompute_face_boxes.py --data-dir \"{root}\""
+                )
+            self.face_boxes = load_face_box_cache(cache_path)
+            missing = [
+                sample['cache_key'] for sample in self.samples
+                if sample['cache_key'] not in self.face_boxes
+            ]
+            if missing:
+                raise RuntimeError(
+                    f"O cache {cache_path} não contém {len(missing)} das "
+                    f"{len(self.samples)} imagens solicitadas. Primeira ausente: {missing[0]}"
+                )
 
         # Transformações de imagem
         h, w = self.img_config.height, self.img_config.width
@@ -216,6 +252,16 @@ class DisfaDataset(Dataset):
     def __getitem__(self, idx: int) -> dict:
         sample = self.samples[idx]
         img = Image.open(sample['image_path']).convert('RGB')
+        if self.crop_faces:
+            box = expand_face_box(
+                self.face_boxes[sample['cache_key']],
+                image_width=img.width,
+                image_height=img.height,
+                margin=self.face_margin,
+            )
+            if box[2] <= box[0] or box[3] <= box[1]:
+                raise ValueError(f"Caixa facial inválida para {sample['image_path']}: {box}")
+            img = img.crop(box)
         img_tensor = self.transform(img)
 
         intensities = torch.tensor(sample['au_intensities'], dtype=torch.float32)
@@ -239,6 +285,9 @@ def create_dataloaders(
     disfa_dir: Optional[Path] = None,
     max_train_samples: Optional[int] = None,
     max_val_samples: Optional[int] = None,
+    crop_faces: bool = False,
+    face_boxes_file: Optional[Path] = None,
+    face_margin: float = 0.20,
 ) -> tuple[DataLoader, DataLoader]:
     """
     Cria DataLoaders de treino e validação.
@@ -260,6 +309,9 @@ def create_dataloaders(
         augment=True,
         disfa_dir=disfa_dir,
         max_samples=max_train_samples,
+        crop_faces=crop_faces,
+        face_boxes_file=face_boxes_file,
+        face_margin=face_margin,
     )
     val_ds = DisfaDataset(
         subjects=subjects_val,
@@ -267,6 +319,9 @@ def create_dataloaders(
         augment=False,
         disfa_dir=disfa_dir,
         max_samples=max_val_samples,
+        crop_faces=crop_faces,
+        face_boxes_file=face_boxes_file,
+        face_margin=face_margin,
     )
 
     train_loader = DataLoader(
@@ -295,6 +350,9 @@ def create_eval_dataloader(
     num_workers: int = 4,
     disfa_dir: Optional[Path] = None,
     max_samples: Optional[int] = None,
+    crop_faces: bool = False,
+    face_boxes_file: Optional[Path] = None,
+    face_margin: float = 0.20,
 ) -> DataLoader:
     """Cria um DataLoader determinístico, sem augmentation, para val/teste."""
     dataset = DisfaDataset(
@@ -303,6 +361,9 @@ def create_eval_dataloader(
         augment=False,
         disfa_dir=disfa_dir,
         max_samples=max_samples,
+        crop_faces=crop_faces,
+        face_boxes_file=face_boxes_file,
+        face_margin=face_margin,
     )
     return DataLoader(
         dataset,

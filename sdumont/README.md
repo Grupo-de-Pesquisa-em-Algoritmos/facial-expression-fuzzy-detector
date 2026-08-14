@@ -42,6 +42,15 @@ $SCRATCH/datasets/disfa-plus/
 └── Labels/
 ```
 
+Antes da primeira execução ROI, gere localmente o cache de rostos e copie também o JSON para o Scratch. As chaves são relativas ao dataset, portanto o arquivo continua válido depois da cópia:
+
+```bash
+python tools/precompute_face_boxes.py --data-dir datasets/archive
+# copie datasets/archive/face_boxes.json para $SCRATCH/datasets/disfa-plus/
+```
+
+O pré-processamento é feito uma vez, fora das épocas. Não execute a varredura completa no nó de login do SDumont; se o dataset só existir no Scratch, faça-a em uma alocação CPU permitida pela sua conta.
+
 O caminho também pode continuar sendo `datasets/archive` dentro do projeto. Para manter o dataset separado do Git, passe `SDUMONT_DATA_DIR` ao submeter os jobs, como mostrado abaixo.
 
 ## 3. Criar o ambiente
@@ -129,6 +138,9 @@ Variáveis aceitas:
 | Variável | Padrão no treino | Efeito |
 |---|---:|---|
 | `SDUMONT_DATA_DIR` | `datasets/archive` | Raiz do DISFA+ |
+| `SDUMONT_FACE_BOXES` | `$SDUMONT_DATA_DIR/face_boxes.json` | Cache reprodutível de caixas faciais |
+| `SDUMONT_FACE_CROPS` | `auto` | `auto` liga no ROI; use `1` para comparar a cabeça global com os mesmos crops |
+| `SDUMONT_FACE_MARGIN` | `0.20` | Margem proporcional adicionada ao redor do rosto |
 | `SDUMONT_CONDA_ENV` | `$SCRATCH/conda-envs/fer-with-fuzzy` | Ambiente Conda |
 | `SDUMONT_EPOCHS` | `50` | Número de épocas |
 | `SDUMONT_BATCH_SIZE` | `4` | Batch por iteração |
@@ -139,6 +151,9 @@ Variáveis aceitas:
 | `SDUMONT_WEIGHTS` | `checkpoints/best_model.pth` | Pesos usados na avaliação |
 | `SDUMONT_THRESHOLDS` | `results/thresholds.json` | JSON criado pela calibração e usado na avaliação |
 | `SDUMONT_BASE_CHANNELS` | `32` | Largura do modelo; use `64` apenas para checkpoints antigos compatíveis |
+| `SDUMONT_ARCHITECTURE` | `roi` | Cabeça `roi` (ROIAlign) ou baseline `global` |
+| `SDUMONT_ROI_CHANNELS` | `128` | Canais da fusão local-global na cabeça ROI |
+| `SDUMONT_ROI_SIZE` | `3` | Resolução espacial extraída pelo ROIAlign |
 | `SDUMONT_EARLY_STOPPING` | `7` | Épocas sem melhora de mAP antes de encerrar |
 
 Opções Slurm do arquivo podem ser substituídas na linha de comando. Exemplo para uma fila permitida pela sua conta e um limite de 12 horas:

@@ -20,6 +20,7 @@ from utils.dataset_loader import (
     DisfaDataset,
 )
 from config.settings import AU_NAMES
+from utils.face_preprocessing import expand_face_box, load_face_box_cache, save_face_box_cache
 
 
 def _build_fake_disfa(tmp_path: Path, n_frames: int = 5) -> Path:
@@ -31,7 +32,9 @@ def _build_fake_disfa(tmp_path: Path, n_frames: int = 5) -> Path:
     lbl_dir.mkdir(parents=True)
 
     for i in range(n_frames):
-        img = Image.fromarray(np.zeros((200, 200, 3), dtype=np.uint8))
+        pixels = np.zeros((200, 200, 3), dtype=np.uint8)
+        pixels[50:150, 50:150] = 255
+        img = Image.fromarray(pixels)
         img.save(img_dir / f"{i:03d}.jpg")
 
     for au in AU_NAMES:
@@ -42,6 +45,16 @@ def _build_fake_disfa(tmp_path: Path, n_frames: int = 5) -> Path:
         (lbl_dir / f"{au}.txt").write_text("".join(lines))
 
     return tmp_path
+
+
+def _write_fake_face_cache(root: Path, n_frames: int = 5) -> Path:
+    boxes = {
+        f"Images/SN001/SN001/Session1/{i:03d}.jpg": (50, 50, 150, 150)
+        for i in range(n_frames)
+    }
+    path = root / 'face_boxes.json'
+    save_face_box_cache(path, boxes, root)
+    return path
 
 
 @pytest.fixture
@@ -69,6 +82,38 @@ def test_item_shapes(fake_disfa):
     assert item["image"].shape == (3, 224, 224)
     assert item["binary"].shape == (len(AU_NAMES),)
     assert item["intensity"].shape == (len(AU_NAMES),)
+
+
+def test_dataset_applies_cached_face_crop(fake_disfa):
+    cache = _write_fake_face_cache(fake_disfa)
+    full = DisfaDataset(subjects=["SN001"], disfa_dir=fake_disfa)[0]["image"]
+    cropped = DisfaDataset(
+        subjects=["SN001"],
+        disfa_dir=fake_disfa,
+        crop_faces=True,
+        face_boxes_file=cache,
+        face_margin=0.0,
+    )[0]["image"]
+    assert cropped.shape == full.shape
+    assert cropped.mean() > full.mean()
+
+
+def test_face_crop_requires_complete_cache(fake_disfa):
+    cache = _write_fake_face_cache(fake_disfa, n_frames=1)
+    with pytest.raises(RuntimeError, match='não contém 4'):
+        DisfaDataset(
+            subjects=["SN001"],
+            disfa_dir=fake_disfa,
+            crop_faces=True,
+            face_boxes_file=cache,
+        )
+
+
+def test_face_box_cache_round_trip_and_margin_clamping(fake_disfa):
+    cache = _write_fake_face_cache(fake_disfa)
+    boxes = load_face_box_cache(cache)
+    assert boxes['Images/SN001/SN001/Session1/000.jpg'] == (50, 50, 150, 150)
+    assert expand_face_box((10, 10, 190, 190), 200, 200, margin=0.2) == (0, 0, 200, 200)
 
 
 def test_binary_is_indicator(fake_disfa):

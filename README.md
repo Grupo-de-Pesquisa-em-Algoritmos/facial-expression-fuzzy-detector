@@ -103,10 +103,15 @@ O modelo detecta as 12 AUs presentes no dataset DISFA+:
 
 **Entrada:** imagem facial RGB (224×224)
 
-**Head (AUDetectionHead):**
-- Recebe features N3, N4, N5 do Neck
-- Global Average Pooling em cada escala → concatenação
-- Camada compartilhada FC → dois ramos paralelos:
+Há duas cabeças selecionáveis para uma ablação controlada com o mesmo backbone, neck, dados e loss:
+
+- `--architecture global`: baseline monolítico com Global Average Pooling.
+- `--architecture roi`: variante local-global com fusão N3/N4/N5, regiões anatômicas e `ROIAlign`.
+
+Na variante `roi`, oito regiões fixas são definidas sobre um crop facial normalizado: sobrancelhas esquerda/direita/central, olhos+bochechas esquerda/direita, nariz, boca e queixo/mandíbula. Cada AU recebe somente suas regiões FACS relacionadas, junto de um vetor pequeno de contexto global. As regiões são prior anatômico, não bounding boxes anotadas ou preditas.
+
+As duas cabeças produzem os mesmos ramos:
+
   - **Ramo binário:** 12 logits → `BCEWithLogitsLoss`
   - **Ramo de intensidade:** 12 valores ∈ [0, 5] via sigmoid → `SmoothL1Loss`
 
@@ -141,7 +146,7 @@ O modelo é treinado no **DISFA+** (*Denver Intensity of Spontaneous Facial Acti
 - **9 sujeitos:** SN001, SN003, SN004, SN007, SN009, SN010, SN013, SN025, SN027
 - **~130 000 frames** de vídeos de expressões espontâneas
 - **Anotações:** intensidade por AU por frame (0–5), feitas por especialistas FACS
-- **Imagens:** faces recortadas 200×200 px
+- **Imagens neste repositório:** frames completos; um cache reprodutível de caixas faciais gera os crops usados pelo ROIAlign
 
 Estrutura esperada em disco:
 ```
@@ -193,35 +198,47 @@ Para preparar o ambiente Conda no Scratch e submeter os jobs Slurm de smoke test
 ### Treinamento
 
 ```bash
-# Padrão (6 sujeitos treino, 1 validação e 2 reservados para teste)
-python main.py --mode train --epochs 50 --batch-size 4
+# Gere uma vez as caixas dos rostos (salva datasets/archive/face_boxes.json)
+python tools/precompute_face_boxes.py --data-dir datasets/archive
 
-# Com mais épocas e learning rate menor
-python main.py --mode train --epochs 100 --batch-size 4 --lr 5e-5
+# ROIAlign (6 sujeitos treino, 1 validação e 2 reservados para teste)
+python main.py --mode train --architecture roi --epochs 50 --batch-size 32 \
+  --save-dir checkpoints/roi-01
+
+# Baseline global com os mesmos crops para comparação justa entre cabeças
+python main.py --mode train --architecture global --face-crops \
+  --epochs 50 --batch-size 32 \
+  --save-dir checkpoints/global-01
 ```
+
+`--architecture roi` habilita os crops automaticamente. `--face-boxes` aceita um cache em outro caminho e `--face-margin` controla a margem ao redor do rosto (padrão `0.20`). O modo global mantém, por compatibilidade, os frames completos quando `--face-crops` não é informado; use a flag no experimento comparativo.
 
 ### Avaliação
 
 ```bash
 # Calibre os thresholds somente na validação
 python main.py --mode calibrate \
-  --weights checkpoints/best_model.pth \
-  --thresholds-file results/thresholds.json
+  --architecture roi \
+  --weights checkpoints/roi-01/best_model.pth \
+  --thresholds-file results/thresholds-roi-01.json
 
 # Aplique-os uma única vez aos sujeitos de teste
 python main.py --mode test \
-  --weights checkpoints/best_model.pth \
-  --thresholds-file results/thresholds.json
+  --architecture roi \
+  --weights checkpoints/roi-01/best_model.pth \
+  --thresholds-file results/thresholds-roi-01.json
 ```
 
 O relatório é salvo em `results/evaluation_report.txt` com precisão, recall, F1 e AP por AU, além de mAP, MAE, RMSE, correlação de Pearson e ICC(3,1).
 
-O modelo padrão usa `base_channels=32`, adequado ao número reduzido de identidades do DISFA+. Checkpoints antigos criados com `base_channels=64` só podem ser carregados passando `--base-channels 64`; os checkpoints anteriores à correção de intensidade 0–5 devem ser retreinados.
+O modelo padrão usa `base_channels=32`. A variante ROI usa ainda `--roi-channels 128 --roi-size 3`. Esses valores e a configuração de crop são persistidos no checkpoint e validados ao carregar os pesos.
 
 ### Demo (imagem completa)
 
 ```bash
-python main.py --mode demo --image foto.jpg --weights checkpoints/best_model.pth
+python main.py --mode demo --architecture roi --image foto.jpg \
+  --weights checkpoints/roi-01/best_model.pth \
+  --thresholds-file results/thresholds-roi-01.json
 ```
 
 Detecta rostos automaticamente via MediaPipe e exibe as AUs ativas com suas intensidades.
