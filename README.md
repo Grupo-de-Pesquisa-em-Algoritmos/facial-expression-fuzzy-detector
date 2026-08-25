@@ -101,7 +101,7 @@ O modelo detecta as 12 AUs presentes no dataset DISFA+:
 
 ### Estágio 1 — Detecção de AUs (YOLOv11)
 
-**Entrada:** imagem facial RGB (224×224)
+**Entrada:** imagem facial `grayscale` (1×224×224) nos novos experimentos, ou RGB (3×224×224) para reproduzir checkpoints antigos.
 
 Há duas cabeças selecionáveis para uma ablação controlada com o mesmo backbone, neck, dados e loss:
 
@@ -128,6 +128,12 @@ As duas cabeças produzem os mesmos ramos:
 $$\mathcal{L} = \lambda_{bce} \cdot \mathcal{L}_{BCE} + \lambda_{l1} \cdot \mathcal{L}_{SmoothL1}$$
 
 onde $\mathcal{L}_{SmoothL1}$ é calculada apenas nos frames em que a AU está ativa.
+
+### Pré-processamento em grayscale
+
+Use `--color-mode grayscale` para converter cada frame RGB em uma imagem PIL `L` de 8 bits (valores 0–255) durante a leitura. Em seguida, `ToTensor` converte o canal para `[0, 1]` e a normalização `(x - 0.5) / 0.5` o leva a `[-1, 1]`. O primeiro `Conv2d` recebe realmente um canal; a imagem não é replicada três vezes e o dataset original não é regravado.
+
+Isso remove matiz e saturação como atalhos, mas não torna o modelo automaticamente independente de tom de pele: luminância, exposição e contraste ainda podem se correlacionar com grupos demográficos. O experimento deve comparar RGB e grayscale com o mesmo split e relatar as métricas também por grupos de tom de pele/exposição quando essas anotações estiverem disponíveis.
 
 ### Estágio 2 — Inferência Fuzzy
 
@@ -203,10 +209,12 @@ python tools/precompute_face_boxes.py --data-dir datasets/archive
 
 # ROIAlign (6 sujeitos treino, 1 validação e 2 reservados para teste)
 python main.py --mode train --architecture roi --epochs 50 --batch-size 32 \
+  --color-mode grayscale \
   --save-dir checkpoints/roi-01
 
 # Baseline global com os mesmos crops para comparação justa entre cabeças
 python main.py --mode train --architecture global --face-crops \
+  --color-mode grayscale \
   --epochs 50 --batch-size 32 \
   --save-dir checkpoints/global-01
 ```
@@ -219,24 +227,26 @@ python main.py --mode train --architecture global --face-crops \
 # Calibre os thresholds somente na validação
 python main.py --mode calibrate \
   --architecture roi \
+  --color-mode grayscale \
   --weights checkpoints/roi-01/best_model.pth \
   --thresholds-file results/thresholds-roi-01.json
 
 # Aplique-os uma única vez aos sujeitos de teste
 python main.py --mode test \
   --architecture roi \
+  --color-mode grayscale \
   --weights checkpoints/roi-01/best_model.pth \
   --thresholds-file results/thresholds-roi-01.json
 ```
 
 O relatório é salvo em `results/evaluation_report.txt` com precisão, recall, F1 e AP por AU, além de mAP, MAE, RMSE, correlação de Pearson e ICC(3,1).
 
-O modelo padrão usa `base_channels=32`. A variante ROI usa ainda `--roi-channels 128 --roi-size 3`. Esses valores e a configuração de crop são persistidos no checkpoint e validados ao carregar os pesos.
+O modelo padrão usa `base_channels=32`. A variante ROI usa ainda `--roi-channels 128 --roi-size 3`. Esses valores, a configuração de crop e o contrato de cor/normalização são persistidos no checkpoint e validados ao carregar os pesos. Um checkpoint treinado em RGB não pode ser carregado por um modelo grayscale (nem o inverso); para reproduzir pesos antigos, informe `--color-mode rgb` em todas as etapas.
 
 ### Demo (imagem completa)
 
 ```bash
-python main.py --mode demo --architecture roi --image foto.jpg \
+python main.py --mode demo --architecture roi --color-mode grayscale --image foto.jpg \
   --weights checkpoints/roi-01/best_model.pth \
   --thresholds-file results/thresholds-roi-01.json
 ```

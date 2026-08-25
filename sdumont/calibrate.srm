@@ -22,6 +22,7 @@ BASE_CHANNELS="${SDUMONT_BASE_CHANNELS:-32}"
 ARCHITECTURE="${SDUMONT_ARCHITECTURE:-roi}"
 ROI_CHANNELS="${SDUMONT_ROI_CHANNELS:-128}"
 ROI_SIZE="${SDUMONT_ROI_SIZE:-3}"
+COLOR_MODE="${SDUMONT_COLOR_MODE:-grayscale}"
 
 if [[ ! -f "$WEIGHTS" ]]; then
     echo "ERRO: pesos não encontrados: $WEIGHTS" >&2
@@ -40,4 +41,5 @@ srun --ntasks=1 python -u main.py \
     --base-channels "$BASE_CHANNELS" \
     --architecture "$ARCHITECTURE" \
     --roi-channels "$ROI_CHANNELS" \
-    --roi-size "$ROI_SIZE"
+    --roi-size "$ROI_SIZE" \
+    --color-mode "$COLOR_MODE"

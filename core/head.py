@@ -120,6 +120,7 @@ class YOLOv11AUDetector(nn.Module):
             raise ValueError("architecture deve ser 'global' ou 'roi'")
 
         self.architecture = architecture
+        self.in_channels = in_channels
         self.base_channels = base_channels
         self.num_aus = num_aus
         self.roi_channels = roi_channels
@@ -148,6 +149,7 @@ class YOLOv11AUDetector(nn.Module):
         """Configuração mínima necessária para reconstruir o checkpoint."""
         return {
             'architecture': self.architecture,
+            'in_channels': self.in_channels,
             'base_channels': self.base_channels,
             'num_aus': self.num_aus,
             'roi_channels': self.roi_channels,

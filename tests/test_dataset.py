@@ -19,7 +19,7 @@ from utils.dataset_loader import (
     DISFA_SUBJECTS,
     DisfaDataset,
 )
-from config.settings import AU_NAMES
+from config.settings import AU_NAMES, get_image_config
 from utils.face_preprocessing import expand_face_box, load_face_box_cache, save_face_box_cache
 
 
@@ -82,6 +82,19 @@ def test_item_shapes(fake_disfa):
     assert item["image"].shape == (3, 224, 224)
     assert item["binary"].shape == (len(AU_NAMES),)
     assert item["intensity"].shape == (len(AU_NAMES),)
+
+
+def test_grayscale_dataset_has_one_normalized_channel(fake_disfa):
+    ds = DisfaDataset(
+        subjects=["SN001"],
+        disfa_dir=fake_disfa,
+        img_config=get_image_config('grayscale'),
+    )
+    image = ds[0]["image"]
+    assert image.shape == (1, 224, 224)
+    assert image.dtype == torch.float32
+    assert image.min().item() >= -1.0
+    assert image.max().item() <= 1.0
 
 
 def test_dataset_applies_cached_face_crop(fake_disfa):

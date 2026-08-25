@@ -13,7 +13,7 @@ import sys
 import torch
 from pathlib import Path
 
-from config import AU_NAMES, DEFAULT_IMAGE_CONFIG
+from config import AU_NAMES, get_image_config
 from core import YOLOv11AUDetector
 from utils import AULoss, Trainer, Evaluator, AUPredictor
 from utils.dataset_loader import (
@@ -51,12 +51,17 @@ def face_boxes_path(args) -> Path | None:
     return Path(args.face_boxes) if args.face_boxes else None
 
 
+def resolve_image_config(args):
+    return get_image_config(args.color_mode)
+
+
 # ─── Construtores ─────────────────────────────────────────────────────────────
 
 def setup_model_and_criterion(args, device):
     """Instancia o modelo AU e a função de perda."""
+    image_config = resolve_image_config(args)
     model = YOLOv11AUDetector(
-        in_channels=3,
+        in_channels=image_config.channels,
         base_channels=args.base_channels,
         architecture=args.architecture,
         roi_channels=args.roi_channels,
@@ -65,6 +70,13 @@ def setup_model_and_criterion(args, device):
     model.preprocessing_config = {
         'face_crops': resolve_face_crops(args),
         'face_margin': args.face_margin,
+        'color_mode': image_config.color_mode,
+        'channels': image_config.channels,
+        'width': image_config.width,
+        'height': image_config.height,
+        'normalize': image_config.normalize,
+        'mean': image_config.mean,
+        'std': image_config.std,
     }
 
     # pos_weight calculado a partir do dataset de treino
@@ -84,7 +96,7 @@ def setup_dataloaders(args):
     train_loader, val_loader = create_dataloaders(
         subjects_train=args.train_subjects,
         subjects_val=args.val_subjects,
-        img_config=DEFAULT_IMAGE_CONFIG,
+        img_config=resolve_image_config(args),
         batch_size=args.batch_size,
         num_workers=args.num_workers,
         disfa_dir=Path(args.data_dir),
@@ -99,6 +111,7 @@ def setup_dataloaders(args):
     print(f"   Sujeitos treino: {args.train_subjects}")
     print(f"   Sujeitos val:    {args.val_subjects}")
     print(f"   Crop facial:     {resolve_face_crops(args)}")
+    print(f"   Modo de cor:     {args.color_mode} ({resolve_image_config(args).channels} canal/is)")
     return train_loader, val_loader
 
 
@@ -125,9 +138,18 @@ def resolve_thresholds(args):
 def load_checkpoint_into_model(model, checkpoint_path, device):
     """Carrega pesos e rejeita cedo uma arquitetura incompatível."""
     checkpoint = torch.load(checkpoint_path, map_location=device)
-    saved_config = checkpoint.get('model_config', {})
+    state = checkpoint.get('model_state_dict', checkpoint)
+    if any(key.startswith('module.') for key in state):
+        state = {key.removeprefix('module.'): value for key, value in state.items()}
+
+    saved_config = dict(checkpoint.get('model_config', {}))
+    stem_key = 'backbone.stem.conv.weight'
+    if stem_key in state:
+        # Checkpoints antigos não registravam esse campo. Inferi-lo do stem
+        # permite emitir um erro claro antes de load_state_dict.
+        saved_config.setdefault('in_channels', int(state[stem_key].shape[1]))
     current_config = model.export_config()
-    for key in ('architecture', 'base_channels', 'roi_channels', 'roi_size'):
+    for key in ('architecture', 'in_channels', 'base_channels', 'roi_channels', 'roi_size'):
         if key in saved_config and saved_config[key] != current_config[key]:
             raise ValueError(
                 f"Checkpoint usa {key}={saved_config[key]!r}, mas o modelo foi "
@@ -135,13 +157,15 @@ def load_checkpoint_into_model(model, checkpoint_path, device):
             )
     saved_preprocessing = checkpoint.get('preprocessing_config', {})
     current_preprocessing = getattr(model, 'preprocessing_config', {})
-    for key in ('face_crops', 'face_margin'):
+    for key in (
+        'face_crops', 'face_margin', 'color_mode', 'channels',
+        'width', 'height', 'normalize', 'mean', 'std',
+    ):
         if key in saved_preprocessing and saved_preprocessing[key] != current_preprocessing.get(key):
             raise ValueError(
                 f"Checkpoint usa {key}={saved_preprocessing[key]!r}, mas a execução "
                 f"usa {key}={current_preprocessing.get(key)!r}. Ajuste o pré-processamento."
             )
-    state = checkpoint.get('model_state_dict', checkpoint)
     model.load_state_dict(state)
     return checkpoint
 
@@ -153,6 +177,7 @@ def train_model(args):
     device = select_device(args.require_cuda)
     print(f"🖥️  Device: {device}")
     print(f"🧠 Arquitetura: {args.architecture}")
+    print(f"🎨 Entrada: {args.color_mode}")
 
     train_loader, val_loader = setup_dataloaders(args)
     model, criterion = setup_model_and_criterion(args, device)
@@ -218,7 +243,7 @@ def test_model(args):
 
     test_loader = create_eval_dataloader(
         subjects=args.test_subjects,
-        img_config=DEFAULT_IMAGE_CONFIG,
+        img_config=resolve_image_config(args),
         batch_size=args.batch_size,
         num_workers=args.num_workers,
         disfa_dir=Path(args.data_dir),
@@ -247,7 +272,7 @@ def calibrate_model(args):
 
     val_loader = create_eval_dataloader(
         subjects=args.val_subjects,
-        img_config=DEFAULT_IMAGE_CONFIG,
+        img_config=resolve_image_config(args),
         batch_size=args.batch_size,
         num_workers=args.num_workers,
         disfa_dir=Path(args.data_dir),
@@ -285,7 +310,7 @@ def demo(args):
         model,
         device=str(device),
         threshold=resolve_thresholds(args),
-        img_config=DEFAULT_IMAGE_CONFIG,
+        img_config=resolve_image_config(args),
     )
 
     print(f"\n🔍 Analisando: {args.image}")
@@ -317,6 +342,12 @@ def main():
     parser.add_argument('--architecture', choices=['global', 'roi'], default='global')
     parser.add_argument('--roi-channels', type=int, default=128)
     parser.add_argument('--roi-size', type=int, default=3)
+    parser.add_argument(
+        '--color-mode',
+        choices=['rgb', 'grayscale'],
+        default='grayscale',
+        help='grayscale (padrão) usa luminância de 8 bits/1 canal; rgb mantém 3 canais',
+    )
     parser.add_argument('--weights', default='checkpoints/best_model.pth')
     parser.add_argument('--resume', default='')
 

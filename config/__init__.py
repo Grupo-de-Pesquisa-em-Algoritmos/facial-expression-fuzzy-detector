@@ -6,6 +6,7 @@ from .settings import (
     FACS_EMOTION_MAPPING,
     AU_MAX_INTENSITY,
     DEFAULT_IMAGE_CONFIG,
+    GRAYSCALE_IMAGE_CONFIG,
     DEFAULT_MODEL_CONFIG,
     DEFAULT_TRAINING_CONFIG,
     ImageConfig,
@@ -14,6 +15,7 @@ from .settings import (
     DISFA_DIR,
     get_dataset_path,
     list_available_datasets,
+    get_image_config,
 )
 
 __all__ = [
@@ -24,6 +26,7 @@ __all__ = [
     'FACS_EMOTION_MAPPING',
     'AU_MAX_INTENSITY',
     'DEFAULT_IMAGE_CONFIG',
+    'GRAYSCALE_IMAGE_CONFIG',
     'DEFAULT_MODEL_CONFIG',
     'DEFAULT_TRAINING_CONFIG',
     'ImageConfig',
@@ -32,4 +35,5 @@ __all__ = [
     'DISFA_DIR',
     'get_dataset_path',
     'list_available_datasets',
+    'get_image_config',
 ]

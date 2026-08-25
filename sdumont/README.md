@@ -11,6 +11,8 @@ Este diretório contém os jobs Slurm do projeto:
 
 Os três jobs usam um nó, uma GPU V100 e um processo Python. O código atual não implementa DDP, portanto solicitar mais GPUs ou mais nós não acelera o treinamento e desperdiça UAs.
 
+Os jobs usam entrada `grayscale` de um canal por padrão. O mesmo valor de `SDUMONT_COLOR_MODE` deve ser mantido no treino, na calibração e na avaliação; checkpoints RGB antigos exigem `SDUMONT_COLOR_MODE=rgb`.
+
 ## 1. Conferir a conta e as filas
 
 Depois de conectar à VPN e entrar por SSH, execute no nó de login:
@@ -154,6 +156,7 @@ Variáveis aceitas:
 | `SDUMONT_ARCHITECTURE` | `roi` | Cabeça `roi` (ROIAlign) ou baseline `global` |
 | `SDUMONT_ROI_CHANNELS` | `128` | Canais da fusão local-global na cabeça ROI |
 | `SDUMONT_ROI_SIZE` | `3` | Resolução espacial extraída pelo ROIAlign |
+| `SDUMONT_COLOR_MODE` | `grayscale` | Entrada de um canal; use `rgb` apenas com checkpoints RGB compatíveis |
 | `SDUMONT_EARLY_STOPPING` | `7` | Épocas sem melhora de mAP antes de encerrar |
 
 Opções Slurm do arquivo podem ser substituídas na linha de comando. Exemplo para uma fila permitida pela sua conta e um limite de 12 horas:

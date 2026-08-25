@@ -18,9 +18,9 @@ import numpy as np
 import torch
 import torch.nn as nn
 from PIL import Image
-from torchvision import transforms
 
-from config.settings import AU_NAMES, AU_DESCRIPTIONS, DEFAULT_IMAGE_CONFIG
+from config.settings import AU_NAMES, AU_DESCRIPTIONS, DEFAULT_IMAGE_CONFIG, get_image_config
+from utils.image_preprocessing import build_image_transform
 
 
 _MEDIAPIPE_AVAILABLE = False
@@ -35,11 +35,7 @@ except ImportError:
 
 def _build_transform(img_config=None):
     cfg = img_config or DEFAULT_IMAGE_CONFIG
-    return transforms.Compose([
-        transforms.Resize((cfg.height, cfg.width)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=list(cfg.mean), std=list(cfg.std)),
-    ])
+    return build_image_transform(cfg, augment=False)
 
 
 def _crop_face_pil(image: Image.Image, bbox: tuple[float, float, float, float],
@@ -93,6 +89,11 @@ class AUPredictor:
         if thresholds.shape != (len(AU_NAMES),):
             raise ValueError(f"Esperados {len(AU_NAMES)} thresholds; recebido {thresholds.shape}")
         self.thresholds = thresholds
+        if img_config is None:
+            in_channels = int(getattr(model, 'in_channels', 3))
+            if in_channels not in (1, 3):
+                raise ValueError(f"Número de canais não suportado na inferência: {in_channels}")
+            img_config = get_image_config('grayscale' if in_channels == 1 else 'rgb')
         self.transform = _build_transform(img_config)
 
         # MediaPipe face detector (carregado sob demanda)
@@ -182,7 +183,7 @@ class AUPredictor:
 
     @torch.no_grad()
     def _predict_crop(self, crop: Image.Image) -> dict:
-        tensor = self.transform(crop).unsqueeze(0).to(self.device)  # (1, 3, H, W)
+        tensor = self.transform(crop).unsqueeze(0).to(self.device)  # (1, C, H, W)
         out = self.model(tensor)
 
         probs     = torch.sigmoid(out['binary_logits']).squeeze(0).cpu().numpy()

@@ -12,10 +12,25 @@ DISFA_DIR = DATA_SETS_DIR / "archive"
 class ImageConfig:
     width: int
     height: int
+    color_mode: str = 'rgb'
     channels: int = 3
     normalize: bool = True
-    mean: Tuple[float, float, float] = (0.485, 0.456, 0.406)
-    std: Tuple[float, float, float] = (0.229, 0.224, 0.225)
+    mean: Tuple[float, ...] = (0.485, 0.456, 0.406)
+    std: Tuple[float, ...] = (0.229, 0.224, 0.225)
+
+    def __post_init__(self) -> None:
+        if self.color_mode not in {'rgb', 'grayscale'}:
+            raise ValueError("color_mode deve ser 'rgb' ou 'grayscale'")
+        expected_channels = 1 if self.color_mode == 'grayscale' else 3
+        if self.channels != expected_channels:
+            raise ValueError(
+                f"{self.color_mode} exige channels={expected_channels}, "
+                f"recebido {self.channels}"
+            )
+        if len(self.mean) != self.channels or len(self.std) != self.channels:
+            raise ValueError("mean e std devem ter um valor por canal")
+        if any(value <= 0 for value in self.std):
+            raise ValueError("std deve conter somente valores positivos")
 
 
 @dataclass
@@ -94,11 +109,31 @@ AU_MAX_INTENSITY: float = 5.0
 DEFAULT_IMAGE_CONFIG = ImageConfig(
     width=224,
     height=224,
+    color_mode='rgb',
     channels=3,
     normalize=True,
     mean=(0.485, 0.456, 0.406),
     std=(0.229, 0.224, 0.225)
 )
+
+GRAYSCALE_IMAGE_CONFIG = ImageConfig(
+    width=224,
+    height=224,
+    color_mode='grayscale',
+    channels=1,
+    normalize=True,
+    mean=(0.5,),
+    std=(0.5,),
+)
+
+
+def get_image_config(color_mode: str = 'rgb') -> ImageConfig:
+    """Retorna a configuração padronizada de contrato para o modo de cor."""
+    if color_mode == 'rgb':
+        return DEFAULT_IMAGE_CONFIG
+    if color_mode == 'grayscale':
+        return GRAYSCALE_IMAGE_CONFIG
+    raise ValueError("color_mode deve ser 'rgb' ou 'grayscale'")
 
 DEFAULT_MODEL_CONFIG = ModelConfig(
     model_name='YOLOv11-AU',

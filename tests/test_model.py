@@ -11,6 +11,7 @@ import pytest
 from core import YOLOv11AUDetector
 from config.settings import AU_MAX_INTENSITY, AU_NAMES, NUM_AUS
 from core.regions import ANATOMICAL_REGIONS, AU_REGION_NAMES
+from main import load_checkpoint_into_model
 
 
 @pytest.fixture
@@ -24,6 +25,31 @@ def test_output_shapes(model):
     assert "binary_logits" in out and "intensity" in out
     assert out["binary_logits"].shape == (2, NUM_AUS)
     assert out["intensity"].shape == (2, NUM_AUS)
+
+
+@pytest.mark.parametrize('architecture', ['global', 'roi'])
+def test_grayscale_model_uses_one_input_channel(architecture):
+    grayscale_model = YOLOv11AUDetector(
+        in_channels=1,
+        base_channels=16,
+        num_aus=NUM_AUS,
+        architecture=architecture,
+        roi_channels=32,
+    )
+    out = grayscale_model(torch.randn(2, 1, 224, 224))
+    assert out["binary_logits"].shape == (2, NUM_AUS)
+    assert grayscale_model.backbone.stem.conv.weight.shape[1] == 1
+    assert grayscale_model.export_config()['in_channels'] == 1
+
+
+def test_old_rgb_checkpoint_is_rejected_by_grayscale_model(tmp_path):
+    rgb_model = YOLOv11AUDetector(in_channels=3, base_channels=16, num_aus=NUM_AUS)
+    checkpoint_path = tmp_path / 'old-rgb-state.pth'
+    torch.save(rgb_model.state_dict(), checkpoint_path)
+    grayscale_model = YOLOv11AUDetector(in_channels=1, base_channels=16, num_aus=NUM_AUS)
+
+    with pytest.raises(ValueError, match='in_channels=3'):
+        load_checkpoint_into_model(grayscale_model, checkpoint_path, torch.device('cpu'))
 
 
 def test_backbone_feature_pyramid_scales(model):

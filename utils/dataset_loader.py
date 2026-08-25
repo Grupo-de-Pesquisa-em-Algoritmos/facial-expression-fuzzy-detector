@@ -21,7 +21,6 @@ import numpy as np
 import torch
 from PIL import Image
 from torch.utils.data import DataLoader, Dataset
-from torchvision import transforms
 
 from config.settings import AU_NAMES, DISFA_DIR, DEFAULT_IMAGE_CONFIG, ImageConfig
 from utils.face_preprocessing import (
@@ -29,6 +28,7 @@ from utils.face_preprocessing import (
     image_cache_key,
     load_face_box_cache,
 )
+from utils.image_preprocessing import build_image_transform
 
 # ─── Sujeitos presentes no dataset DISFA+ ────────────────────────────────────
 DISFA_SUBJECTS = [
@@ -192,22 +192,7 @@ class DisfaDataset(Dataset):
                     f"{len(self.samples)} imagens solicitadas. Primeira ausente: {missing[0]}"
                 )
 
-        # Transformações de imagem
-        h, w = self.img_config.height, self.img_config.width
-        aug_transforms = [
-            transforms.RandomHorizontalFlip(p=0.5),
-            transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.2),
-        ] if augment else []
-
-        self.transform = transforms.Compose([
-            transforms.Resize((h, w)),
-            *aug_transforms,
-            transforms.ToTensor(),
-            transforms.Normalize(
-                mean=list(self.img_config.mean),
-                std=list(self.img_config.std),
-            ),
-        ])
+        self.transform = build_image_transform(self.img_config, augment=augment)
 
     # ── Estatísticas para pos_weight BCE ──────────────────────────────────────
     def compute_pos_weight(
@@ -268,7 +253,7 @@ class DisfaDataset(Dataset):
         binary = (intensities > 0).float()
 
         return {
-            'image':     img_tensor,       # (3, H, W)
+            'image':     img_tensor,       # (C, H, W), C=1 grayscale ou C=3 RGB
             'binary':    binary,           # (12,) 0/1
             'intensity': intensities,      # (12,) 0–5
         }
